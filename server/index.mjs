@@ -1,0 +1,538 @@
+import cors from 'cors'
+import express from 'express'
+import fs from 'node:fs'
+import { createServer } from 'node:http'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { Server as SocketServer } from 'socket.io'
+import { createClient } from '@supabase/supabase-js'
+
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
+const rootDir = path.resolve(__dirname, '..')
+const dbPath =
+  process.env.COLLABORATORS_DB_PATH ||
+  path.join(__dirname, 'data', 'collaborators-db.json')
+const dbDir = path.dirname(dbPath)
+const collaboratorsSeedPath = path.join(rootDir, 'src', 'data', 'collaborators.json')
+const parsedPort = Number(process.env.PORT)
+const port = Number.isFinite(parsedPort) && parsedPort > 0 ? parsedPort : 3030
+const host = process.env.HOST || '0.0.0.0'
+const supabaseUrl = process.env.SUPABASE_URL?.trim() || ''
+const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim() || ''
+const collaboratorsTable = process.env.SUPABASE_COLLABORATORS_TABLE?.trim() || 'collaborators'
+
+fs.mkdirSync(dbDir, { recursive: true })
+
+const usingSupabase = Boolean(supabaseUrl && supabaseServiceRoleKey)
+const supabase = usingSupabase
+  ? createClient(supabaseUrl, supabaseServiceRoleKey, {
+      auth: {
+        autoRefreshToken: false,
+        persistSession: false,
+      },
+    })
+  : null
+
+const app = express()
+const httpServer = createServer(app)
+const io = new SocketServer(httpServer, {
+  cors: {
+    origin: '*',
+  },
+})
+
+app.set('trust proxy', 1)
+app.use(
+  cors({
+    origin: '*',
+  }),
+)
+app.use(express.json({ limit: '1mb' }))
+
+function validateCollaborator(input) {
+  const matricula = String(input?.matricula ?? '').trim()
+  const nome = String(input?.nome ?? '').trim()
+
+  if (!matricula) {
+    return { error: 'A matricula e obrigatoria.' }
+  }
+
+  if (!nome) {
+    return { error: 'O nome e obrigatorio.' }
+  }
+
+  return { matricula, nome }
+}
+
+function parseJsonFile(filePath) {
+  const rawData = fs.readFileSync(filePath, 'utf8')
+  const cleanData = rawData.replace(/^\uFEFF/, '')
+  return JSON.parse(cleanData)
+}
+
+function readSeedRows() {
+  const seedRows = parseJsonFile(collaboratorsSeedPath)
+
+  return seedRows.map((row) => ({
+    matricula: String(row.matricula ?? '').trim(),
+    nome: String(row.nome ?? '').trim(),
+  }))
+}
+
+function ensureFileDatabase() {
+  if (fs.existsSync(dbPath)) {
+    return
+  }
+
+  const timestamp = new Date().toISOString()
+  const rows = readSeedRows()
+
+  writeFileDatabase({
+    updatedAt: timestamp,
+    items: rows.map((row) => ({
+      ...row,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    })),
+  })
+}
+
+function readFileDatabase() {
+  ensureFileDatabase()
+  return parseJsonFile(dbPath)
+}
+
+function writeFileDatabase(database) {
+  fs.writeFileSync(dbPath, JSON.stringify(database, null, 2), 'utf8')
+}
+
+async function ensureSupabaseSeed() {
+  if (!supabase) {
+    return
+  }
+
+  const { count, error } = await supabase
+    .from(collaboratorsTable)
+    .select('*', { count: 'exact', head: true })
+
+  if (error) {
+    throw error
+  }
+
+  if ((count ?? 0) > 0) {
+    return
+  }
+
+  const timestamp = new Date().toISOString()
+  const seedRows = readSeedRows().map((row) => ({
+    ...row,
+    created_at: timestamp,
+    updated_at: timestamp,
+  }))
+
+  const { error: insertError } = await supabase.from(collaboratorsTable).insert(seedRows)
+
+  if (insertError) {
+    throw insertError
+  }
+}
+
+async function listCollaborators() {
+  if (supabase) {
+    const { data, error } = await supabase
+      .from(collaboratorsTable)
+      .select('matricula,nome,updated_at')
+      .order('nome', { ascending: true })
+      .order('matricula', { ascending: true })
+
+    if (error) {
+      throw error
+    }
+
+    return data ?? []
+  }
+
+  return readFileDatabase().items
+    .slice()
+    .sort((a, b) => {
+      const nameDiff = a.nome.localeCompare(b.nome, 'pt-BR')
+
+      if (nameDiff !== 0) {
+        return nameDiff
+      }
+
+      return a.matricula.localeCompare(b.matricula, 'pt-BR')
+    })
+}
+
+async function getCollaboratorsPayload() {
+  const items = (await listCollaborators()).map((item) => ({
+    matricula: item.matricula,
+    nome: item.nome,
+  }))
+
+  if (supabase) {
+    const { data, error } = await supabase
+      .from(collaboratorsTable)
+      .select('updated_at')
+      .order('updated_at', { ascending: false })
+      .limit(1)
+
+    if (error) {
+      throw error
+    }
+
+    return {
+      items,
+      total: items.length,
+      updatedAt: data?.[0]?.updated_at ?? new Date().toISOString(),
+    }
+  }
+
+  const database = readFileDatabase()
+
+  return {
+    items,
+    total: items.length,
+    updatedAt: database.updatedAt,
+  }
+}
+
+async function emitCollaboratorsChanged() {
+  const payload = await getCollaboratorsPayload()
+
+  io.emit('collaborators:changed', {
+    total: payload.total,
+    updatedAt: payload.updatedAt,
+  })
+}
+
+async function createCollaboratorRecord({ matricula, nome }) {
+  if (supabase) {
+    const timestamp = new Date().toISOString()
+    const { data, error } = await supabase
+      .from(collaboratorsTable)
+      .insert({
+        matricula,
+        nome,
+        created_at: timestamp,
+        updated_at: timestamp,
+      })
+      .select('matricula,nome')
+      .single()
+
+    if (error) {
+      if (error.code === '23505') {
+        throw new Error('Ja existe um colaborador com essa matricula.')
+      }
+
+      throw error
+    }
+
+    return data
+  }
+
+  const database = readFileDatabase()
+  const existing = database.items.find((item) => item.matricula === matricula)
+
+  if (existing) {
+    throw new Error('Ja existe um colaborador com essa matricula.')
+  }
+
+  const timestamp = new Date().toISOString()
+  const row = {
+    matricula,
+    nome,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  }
+
+  database.items.push(row)
+  database.updatedAt = timestamp
+  writeFileDatabase(database)
+
+  return {
+    matricula,
+    nome,
+  }
+}
+
+async function updateCollaboratorRecord(originalMatricula, { matricula, nome }) {
+  if (supabase) {
+    const { data: existing, error: existingError } = await supabase
+      .from(collaboratorsTable)
+      .select('matricula')
+      .eq('matricula', originalMatricula)
+      .maybeSingle()
+
+    if (existingError) {
+      throw existingError
+    }
+
+    if (!existing) {
+      throw new Error('Colaborador nao encontrado.')
+    }
+
+    if (matricula !== originalMatricula) {
+      const { data: duplicate, error: duplicateError } = await supabase
+        .from(collaboratorsTable)
+        .select('matricula')
+        .eq('matricula', matricula)
+        .maybeSingle()
+
+      if (duplicateError) {
+        throw duplicateError
+      }
+
+      if (duplicate) {
+        throw new Error('Ja existe um colaborador com essa matricula.')
+      }
+    }
+
+    const { data, error } = await supabase
+      .from(collaboratorsTable)
+      .update({
+        matricula,
+        nome,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('matricula', originalMatricula)
+      .select('matricula,nome')
+      .single()
+
+    if (error) {
+      throw error
+    }
+
+    return data
+  }
+
+  const database = readFileDatabase()
+  const existing = database.items.find((item) => item.matricula === originalMatricula)
+
+  if (!existing) {
+    throw new Error('Colaborador nao encontrado.')
+  }
+
+  const duplicate = database.items.find(
+    (item) => item.matricula === matricula && item.matricula !== originalMatricula,
+  )
+
+  if (duplicate) {
+    throw new Error('Ja existe um colaborador com essa matricula.')
+  }
+
+  const timestamp = new Date().toISOString()
+  database.items = database.items.map((item) =>
+    item.matricula === originalMatricula
+      ? {
+          ...item,
+          matricula,
+          nome,
+          updatedAt: timestamp,
+        }
+      : item,
+  )
+  database.updatedAt = timestamp
+  writeFileDatabase(database)
+
+  return {
+    matricula,
+    nome,
+  }
+}
+
+async function deleteCollaboratorRecord(matricula) {
+  if (supabase) {
+    const { data, error } = await supabase
+      .from(collaboratorsTable)
+      .delete()
+      .eq('matricula', matricula)
+      .select('matricula')
+
+    if (error) {
+      throw error
+    }
+
+    if (!data?.length) {
+      throw new Error('Colaborador nao encontrado.')
+    }
+
+    return
+  }
+
+  const database = readFileDatabase()
+  const nextItems = database.items.filter((item) => item.matricula !== matricula)
+
+  if (nextItems.length === database.items.length) {
+    throw new Error('Colaborador nao encontrado.')
+  }
+
+  database.items = nextItems
+  database.updatedAt = new Date().toISOString()
+  writeFileDatabase(database)
+}
+
+function mapErrorStatus(error) {
+  const message = error instanceof Error ? error.message : 'Erro interno no servidor.'
+
+  if (message === 'Ja existe um colaborador com essa matricula.') {
+    return 409
+  }
+
+  if (message === 'Colaborador nao encontrado.') {
+    return 404
+  }
+
+  return 500
+}
+
+app.get('/health', async (_request, response, next) => {
+  try {
+    if (supabase) {
+      await ensureSupabaseSeed()
+    }
+
+    const payload = await getCollaboratorsPayload()
+
+    response.json({
+      ok: true,
+      service: 'skore-manager-collaborators',
+      environment: process.env.NODE_ENV || 'development',
+      port,
+      storage: usingSupabase ? 'supabase' : 'file',
+      totalCollaborators: payload.total,
+    })
+  } catch (error) {
+    next(error)
+  }
+})
+
+app.get('/', (_request, response) => {
+  response.json({
+    ok: true,
+    service: 'skore-manager-collaborators',
+    message: 'API online',
+  })
+})
+
+app.get('/api/collaborators', async (_request, response, next) => {
+  try {
+    if (supabase) {
+      await ensureSupabaseSeed()
+    }
+
+    response.json(await getCollaboratorsPayload())
+  } catch (error) {
+    next(error)
+  }
+})
+
+app.post('/api/collaborators', async (request, response, next) => {
+  try {
+    const parsed = validateCollaborator(request.body)
+
+    if ('error' in parsed) {
+      response.status(400).json(parsed)
+      return
+    }
+
+    const item = await createCollaboratorRecord(parsed)
+    await emitCollaboratorsChanged()
+
+    response.status(201).json({ item })
+  } catch (error) {
+    const status = mapErrorStatus(error)
+
+    if (status !== 500) {
+      response.status(status).json({
+        error: error instanceof Error ? error.message : 'Erro interno no servidor.',
+      })
+      return
+    }
+
+    next(error)
+  }
+})
+
+app.patch('/api/collaborators/:matricula', async (request, response, next) => {
+  try {
+    const originalMatricula = String(request.params.matricula ?? '').trim()
+    const parsed = validateCollaborator(request.body)
+
+    if ('error' in parsed) {
+      response.status(400).json(parsed)
+      return
+    }
+
+    const item = await updateCollaboratorRecord(originalMatricula, parsed)
+    await emitCollaboratorsChanged()
+
+    response.json({ item })
+  } catch (error) {
+    const status = mapErrorStatus(error)
+
+    if (status !== 500) {
+      response.status(status).json({
+        error: error instanceof Error ? error.message : 'Erro interno no servidor.',
+      })
+      return
+    }
+
+    next(error)
+  }
+})
+
+app.delete('/api/collaborators/:matricula', async (request, response, next) => {
+  try {
+    const matricula = String(request.params.matricula ?? '').trim()
+    await deleteCollaboratorRecord(matricula)
+    await emitCollaboratorsChanged()
+    response.status(204).end()
+  } catch (error) {
+    const status = mapErrorStatus(error)
+
+    if (status !== 500) {
+      response.status(status).json({
+        error: error instanceof Error ? error.message : 'Erro interno no servidor.',
+      })
+      return
+    }
+
+    next(error)
+  }
+})
+
+io.on('connection', async (socket) => {
+  try {
+    if (supabase) {
+      await ensureSupabaseSeed()
+    }
+
+    const payload = await getCollaboratorsPayload()
+    socket.emit('collaborators:changed', {
+      total: payload.total,
+      updatedAt: payload.updatedAt,
+    })
+  } catch (error) {
+    console.error('Falha ao sincronizar socket:', error)
+  }
+})
+
+app.use((error, _request, response, _next) => {
+  console.error('Erro nao tratado na API:', error)
+  response.status(500).json({
+    error: 'Erro interno no servidor.',
+  })
+})
+
+httpServer.listen(port, host, () => {
+  console.log(`Servidor de colaboradores ativo em http://${host}:${port}`)
+  console.log(`Armazenamento: ${usingSupabase ? 'supabase' : 'file'}`)
+})
+
+httpServer.on('error', (error) => {
+  console.error('Falha ao iniciar servidor:', error)
+  process.exit(1)
+})
