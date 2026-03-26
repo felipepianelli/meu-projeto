@@ -407,6 +407,7 @@ let missionOverviewCache:
 
 let collaboratorMatrixCache: Promise<CollaboratorMissionMatrix> | null = null
 let collaboratorsSocket: Socket | null = null
+const auditedTeamMembersCache = new Map<number, Promise<TeamMember[]>>()
 
 type MissionAudienceOverride = {
   audience: Array<{
@@ -503,7 +504,19 @@ export async function fetchMembersForTeam(
 export async function fetchAuditedMembersForTeam(
   teamId: number,
   signal?: AbortSignal,
+  options?: { refresh?: boolean },
 ): Promise<TeamMember[]> {
+  if (options?.refresh) {
+    auditedTeamMembersCache.delete(teamId)
+  }
+
+  const cached = auditedTeamMembersCache.get(teamId)
+
+  if (cached) {
+    return cached
+  }
+
+  const request = (async () => {
   const usersUrl =
     import.meta.env.VITE_SKORE_USERS_URL?.trim() ||
     'https://knowledge.skore.io/workspace/v2/users'
@@ -552,11 +565,22 @@ export async function fetchAuditedMembersForTeam(
         array.findIndex((candidate) => candidate.id === member.id) === index,
     )
     .sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'))
+  })()
+
+  auditedTeamMembersCache.set(teamId, request)
+
+  try {
+    return await request
+  } catch (error) {
+    auditedTeamMembersCache.delete(teamId)
+    throw error
+  }
 }
 
 export function clearUsersCache() {
   missionOverviewCache = null
   collaboratorMatrixCache = null
+  auditedTeamMembersCache.clear()
 }
 
 export async function findUsersByMatriculas(
