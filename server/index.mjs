@@ -344,7 +344,7 @@ async function buildTeamAuditCsv(teamId) {
 
   return {
     count: matchedUsers.length,
-    content: `\ufeff${rows.map((row) => row.map(escapeCsvValue).join(',')).join('\n')}`,
+    content: `\ufeffsep=;\n${rows.map((row) => row.map(escapeCsvValue).join(';')).join('\n')}`,
   }
 }
 
