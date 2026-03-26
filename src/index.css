@@ -829,6 +829,19 @@ svg {
   gap: 18px;
 }
 
+.times-subtabs {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 18px;
+  flex-wrap: wrap;
+}
+
+.secondary-button.is-active {
+  border-color: rgba(109, 106, 248, 0.65);
+  background: rgba(109, 106, 248, 0.14);
+  color: #f5f7fb;
+}
+
 .access-grid {
   display: grid;
   gap: 18px;
