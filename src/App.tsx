@@ -10,8 +10,8 @@ import {
   clearUsersCache,
   createCollaborator,
   deleteCollaborator,
+  downloadTeamAuditCsvFromBackend,
   fetchAllMissionReportRows,
-  fetchAuditedMembersForTeam,
   fetchCollaboratorMissionMatrix,
   fetchCollaboratorsDb,
   fetchMissionAudienceMembers,
@@ -30,7 +30,6 @@ import type {
   MissionStatusMetric,
   NavItem,
   SyncEvent,
-  TeamMember,
   TeamSummary,
   UserSummary,
 } from './types'
@@ -884,10 +883,9 @@ function TeamAuditItem({
                 setFeedback(null)
 
                 try {
-                  const loadedMembers = await fetchAuditedMembersForTeam(team.id)
-                  downloadTeamMembersCsv(team.name, loadedMembers)
+                  const total = await downloadTeamAuditCsvFromBackend(team.id, team.name)
                   setFeedback(
-                    `${loadedMembers.length} participante(s) auditados e baixados em CSV para o time ${team.name}.`,
+                    `${total} participante(s) auditados e baixados em CSV para o time ${team.name}.`,
                   )
                 } catch (error) {
                   setFeedback(
@@ -1885,31 +1883,6 @@ function AccessUserRow({
       </div>
     </div>
   )
-}
-
-function downloadTeamMembersCsv(teamName: string, members: TeamMember[]) {
-  const rows = [
-    ['Matricula', 'Nome'],
-    ...members.map((member) => [member.username ?? '-', member.name]),
-  ]
-
-  const content = rows
-    .map((row) =>
-      row.map((value) => `"${String(value).replace(/"/g, '""')}"`).join(','),
-    )
-    .join('\n')
-
-  const blob = new Blob([`\ufeff${content}`], {
-    type: 'text/csv;charset=utf-8;',
-  })
-  const url = URL.createObjectURL(blob)
-  const link = document.createElement('a')
-  link.href = url
-  link.download = `${slugify(teamName)}.csv`
-  document.body.appendChild(link)
-  link.click()
-  document.body.removeChild(link)
-  URL.revokeObjectURL(url)
 }
 
 function downloadMissionAudienceMembers(
