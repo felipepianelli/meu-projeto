@@ -88,6 +88,15 @@ function hasCollaboratorsBackend() {
   return Boolean(collaboratorsApiUrl)
 }
 
+function sanitizeFileName(value: string) {
+  return value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-zA-Z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .toLowerCase()
+}
+
 type CollaboratorsApiResponse = {
   items: CollaboratorRecord[]
   total: number
@@ -556,6 +565,37 @@ export function clearUsersCache() {
   collaboratorMatrixCache = null
   allActiveUsersCache = null
   auditedTeamMembersCache.clear()
+}
+
+export async function downloadTeamAuditCsvFromBackend(teamId: number, teamName: string) {
+  if (!hasCollaboratorsBackend()) {
+    throw new Error('Backend de colaboradores nao configurado.')
+  }
+
+  const url = new URL(`${collaboratorsApiUrl}/api/team-audit/${teamId}/csv`)
+  url.searchParams.set('teamName', teamName)
+
+  const response = await fetch(url.toString(), {
+    headers: {
+      Accept: 'text/csv',
+    },
+  })
+
+  if (!response.ok) {
+    throw new Error(`Falha ao gerar auditoria do time (${response.status})`)
+  }
+
+  const blob = await response.blob()
+  const objectUrl = window.URL.createObjectURL(blob)
+  const link = window.document.createElement('a')
+  link.href = objectUrl
+  link.download = `${sanitizeFileName(teamName)}.csv`
+  window.document.body.appendChild(link)
+  link.click()
+  window.document.body.removeChild(link)
+  window.URL.revokeObjectURL(objectUrl)
+
+  return Number(response.headers.get('X-Team-Audit-Count') ?? 0)
 }
 
 async function fetchAllActiveUsers(signal?: AbortSignal): Promise<SkoreUserApiItem[]> {
