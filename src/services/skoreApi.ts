@@ -408,6 +408,7 @@ let missionOverviewCache:
 let collaboratorMatrixCache: Promise<CollaboratorMissionMatrix> | null = null
 let collaboratorsSocket: Socket | null = null
 const auditedTeamMembersCache = new Map<number, Promise<TeamMember[]>>()
+let allActiveUsersCache: Promise<SkoreUserApiItem[]> | null = null
 
 type MissionAudienceOverride = {
   audience: Array<{
@@ -508,6 +509,7 @@ export async function fetchAuditedMembersForTeam(
 ): Promise<TeamMember[]> {
   if (options?.refresh) {
     auditedTeamMembersCache.delete(teamId)
+    allActiveUsersCache = null
   }
 
   const cached = auditedTeamMembersCache.get(teamId)
@@ -517,54 +519,26 @@ export async function fetchAuditedMembersForTeam(
   }
 
   const request = (async () => {
-  const usersUrl =
-    import.meta.env.VITE_SKORE_USERS_URL?.trim() ||
-    'https://knowledge.skore.io/workspace/v2/users'
-  const matchedUsers: TeamMember[] = []
-  let continuation: string | undefined
-
-  do {
-    const url = new URL(usersUrl)
-    url.searchParams.set('limit', '100')
-    url.searchParams.set('active', 'true')
-
-    if (continuation) {
-      url.searchParams.set('continuation', continuation)
-    }
-
-    const payload = await readJson<SkoreUsersSearchResponse>(url.toString(), {
-      signal,
-      headers: {
-        Accept: 'application/json',
-        'Content-Type': 'application/json',
-        ...getAuthHeaders({ rawToken: true }),
-      },
-    })
-
-    payload.results
-      .filter((user) => user.teams.some((team) => team.id === teamId))
-      .forEach((user) => {
-        matchedUsers.push({
-          id: user.id,
-          name:
-            getCollaboratorContext().collaboratorNamesByMatricula.get(user.username ?? '') ||
-            user.name,
-          username: user.username,
-          inSpreadsheet: user.username
-            ? getCollaboratorContext().allowedMatriculas.has(user.username)
-            : false,
-        })
-      })
-
-    continuation = payload.continuation
-  } while (continuation)
-
-  return matchedUsers
-    .filter(
-      (member, index, array) =>
-        array.findIndex((candidate) => candidate.id === member.id) === index,
+    const matchedUsers = (await fetchAllActiveUsers(signal)).filter((user) =>
+      user.teams.some((team) => team.id === teamId),
     )
-    .sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'))
+
+    return matchedUsers
+      .map((user) => ({
+        id: user.id,
+        name:
+          getCollaboratorContext().collaboratorNamesByMatricula.get(user.username ?? '') ||
+          user.name,
+        username: user.username,
+        inSpreadsheet: user.username
+          ? getCollaboratorContext().allowedMatriculas.has(user.username)
+          : false,
+      }))
+      .filter(
+        (member, index, array) =>
+          array.findIndex((candidate) => candidate.id === member.id) === index,
+      )
+      .sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'))
   })()
 
   auditedTeamMembersCache.set(teamId, request)
@@ -580,7 +554,55 @@ export async function fetchAuditedMembersForTeam(
 export function clearUsersCache() {
   missionOverviewCache = null
   collaboratorMatrixCache = null
+  allActiveUsersCache = null
   auditedTeamMembersCache.clear()
+}
+
+async function fetchAllActiveUsers(signal?: AbortSignal): Promise<SkoreUserApiItem[]> {
+  if (allActiveUsersCache) {
+    return allActiveUsersCache
+  }
+
+  const request = (async () => {
+    const usersUrl =
+      import.meta.env.VITE_SKORE_USERS_URL?.trim() ||
+      'https://knowledge.skore.io/workspace/v2/users'
+    const users: SkoreUserApiItem[] = []
+    let continuation: string | undefined
+
+    do {
+      const url = new URL(usersUrl)
+      url.searchParams.set('limit', '100')
+      url.searchParams.set('active', 'true')
+
+      if (continuation) {
+        url.searchParams.set('continuation', continuation)
+      }
+
+      const payload = await readJson<SkoreUsersSearchResponse>(url.toString(), {
+        signal,
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+          ...getAuthHeaders({ rawToken: true }),
+        },
+      })
+
+      users.push(...payload.results)
+      continuation = payload.continuation
+    } while (continuation)
+
+    return users
+  })()
+
+  allActiveUsersCache = request
+
+  try {
+    return await request
+  } catch (error) {
+    allActiveUsersCache = null
+    throw error
+  }
 }
 
 export async function findUsersByMatriculas(
