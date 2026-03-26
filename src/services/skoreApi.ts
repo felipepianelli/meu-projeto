@@ -156,7 +156,28 @@ export async function fetchDashboardData(signal?: AbortSignal): Promise<Dashboar
 
   if (!baseUrl && !hasToken()) {
     await wait(500)
-    return mockDashboardData
+    return normalizeDashboardPayload({
+      ...mockDashboardData,
+      collaboratorCount: totalCollaborators,
+      activeMissionCount: missionAudienceCatalog.length,
+      lastSyncLabel: `Sincronizado em ${formatDateLabel(new Date().toISOString())}`,
+      syncEvents: [
+        {
+          id: 'collaborators-online',
+          title: 'Colaboradores do banco online',
+          detail: `${totalCollaborators} colaboradores carregados a partir da base online central.`,
+          time: 'Agora',
+          state: 'success',
+        },
+        {
+          id: 'missions-catalog',
+          title: 'Missoes mapeadas localmente',
+          detail: `${missionAudienceCatalog.length} missoes no catalogo atual do sistema.`,
+          time: 'Agora',
+          state: 'info',
+        },
+      ],
+    })
   }
 
   try {
