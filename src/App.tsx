@@ -11,6 +11,7 @@ import {
   createCollaborator,
   deleteCollaborator,
   fetchAllMissionReportRows,
+  fetchAuditedMembersForTeam,
   fetchCollaboratorMissionMatrix,
   fetchCollaboratorsDb,
   fetchMissionAudienceMembers,
@@ -53,6 +54,7 @@ const ACCESS_USERS_KEY = 'skore_manager_access_users'
 
 function App() {
   const [activeTab, setActiveTab] = useState('Overview')
+  const [timesSubTab, setTimesSubTab] = useState<'assign' | 'audit'>('assign')
   const [showLoginPanel, setShowLoginPanel] = useState(false)
   const [accessUsersState, setAccessUsersState] = useState<AccessUser[]>(() =>
     getStoredAccessUsers(),
@@ -575,13 +577,34 @@ function App() {
           <section className="mission-users-grid">
             <article className="card sync-card">
               <div className="card-header">
-                <h3>Usuarios por Time</h3>
+                <h3>Times</h3>
+              </div>
+
+              <div className="times-subtabs">
+                <button
+                  className={`secondary-button${timesSubTab === 'assign' ? ' is-active' : ''}`}
+                  type="button"
+                  onClick={() => setTimesSubTab('assign')}
+                >
+                  Atribuicao de Times
+                </button>
+                <button
+                  className={`secondary-button${timesSubTab === 'audit' ? ' is-active' : ''}`}
+                  type="button"
+                  onClick={() => setTimesSubTab('audit')}
+                >
+                  Auditoria de Times
+                </button>
               </div>
 
               <div className="mission-team-list">
-                {teams.map((team) => (
-                  <MissionTeamItem key={team.id} team={team} canManage={canManage} />
-                ))}
+                {teams.map((team) =>
+                  timesSubTab === 'assign' ? (
+                    <MissionTeamItem key={team.id} team={team} canManage={canManage} />
+                  ) : (
+                    <TeamAuditItem key={team.id} team={team} />
+                  ),
+                )}
               </div>
             </article>
           </section>
@@ -932,6 +955,125 @@ function MissionTeamItem({
         <p className="upload-feedback">Perfil de visualizacao: acoes de edicao estao bloqueadas.</p>
       ) : null}
       {uploadMessage ? <p className="upload-feedback">{uploadMessage}</p> : null}
+    </div>
+  )
+}
+
+function TeamAuditItem({
+  team,
+}: {
+  team: TeamSummary
+}) {
+  const [page, setPage] = useState(1)
+  const [isLoadingMembers, setIsLoadingMembers] = useState(false)
+  const [members, setMembers] = useState<TeamMember[]>([])
+  const [feedback, setFeedback] = useState<string | null>(null)
+  const totalPages = Math.max(1, Math.ceil(members.length / TEAM_PAGE_SIZE))
+  const startIndex = (page - 1) * TEAM_PAGE_SIZE
+  const visibleMembers = members.slice(startIndex, startIndex + TEAM_PAGE_SIZE)
+
+  async function loadMembers() {
+    setIsLoadingMembers(true)
+    setFeedback(null)
+
+    try {
+      const loadedMembers = await fetchAuditedMembersForTeam(team.id)
+      setMembers(loadedMembers)
+      setPage(1)
+      setFeedback(
+        `${loadedMembers.length} usuario(s) auditados para o time ${team.name}.`,
+      )
+    } catch (error) {
+      setFeedback(
+        error instanceof Error
+          ? error.message
+          : 'Falha ao auditar os usuarios deste time.',
+      )
+    } finally {
+      setIsLoadingMembers(false)
+    }
+  }
+
+  return (
+    <div className="mission-team-card">
+      <div className="mission-team-head">
+        <strong>{team.name}</strong>
+        <div className="mission-team-actions">
+          <div className="entity-meta">
+            <span>{team.usersCount} atribuidos no site</span>
+            <span>{members.length} auditados</span>
+          </div>
+          <div className="team-action-group">
+            <button
+              className="secondary-button"
+              type="button"
+              onClick={() => void loadMembers()}
+              disabled={isLoadingMembers}
+            >
+              {isLoadingMembers ? 'Auditando...' : 'Auditar time'}
+            </button>
+            <button
+              className="secondary-button"
+              type="button"
+              onClick={() => downloadTeamMembers(team.name, members)}
+              disabled={!members.length}
+            >
+              Baixar XLS
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {members.length ? (
+        <div className="team-table-wrap">
+          <table className="team-table">
+            <thead>
+              <tr>
+                <th>Matricula</th>
+                <th>Nome</th>
+              </tr>
+            </thead>
+            <tbody>
+              {visibleMembers.map((member) => (
+                <tr key={`${team.id}-audit-${member.id}`}>
+                  <td>{member.username ?? '-'}</td>
+                  <td>{member.name}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+
+          {members.length > TEAM_PAGE_SIZE ? (
+            <div className="table-pagination">
+              <button
+                className="secondary-button"
+                type="button"
+                onClick={() => setPage((current) => Math.max(1, current - 1))}
+                disabled={page === 1}
+              >
+                Anterior
+              </button>
+              <span>
+                Pagina {page} de {totalPages}
+              </span>
+              <button
+                className="secondary-button"
+                type="button"
+                onClick={() => setPage((current) => Math.min(totalPages, current + 1))}
+                disabled={page === totalPages}
+              >
+                Proxima
+              </button>
+            </div>
+          ) : null}
+        </div>
+      ) : (
+        <p className="mission-empty">
+          Clique em `Auditar time` para expandir os usuarios reais encontrados no historico atual da plataforma.
+        </p>
+      )}
+
+      {feedback ? <p className="upload-feedback">{feedback}</p> : null}
     </div>
   )
 }
