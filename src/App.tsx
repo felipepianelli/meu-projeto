@@ -871,27 +871,6 @@ function TeamAuditItem({
     void fetchAuditedMembersForTeam(team.id).catch(() => undefined)
   }, [team.id])
 
-  async function downloadAudit() {
-    setIsLoadingMembers(true)
-    setFeedback(null)
-
-    try {
-      const loadedMembers = await fetchAuditedMembersForTeam(team.id)
-      downloadTeamMembers(team.name, loadedMembers)
-      setFeedback(
-        `${loadedMembers.length} participante(s) auditados e baixados para o time ${team.name}.`,
-      )
-    } catch (error) {
-      setFeedback(
-        error instanceof Error
-          ? error.message
-          : 'Falha ao auditar os usuarios deste time.',
-      )
-    } finally {
-      setIsLoadingMembers(false)
-    }
-  }
-
   return (
     <div className="mission-team-card">
       <div className="mission-team-head">
@@ -901,14 +880,6 @@ function TeamAuditItem({
             <span>{team.usersCount} participantes no site</span>
           </div>
           <div className="team-action-group">
-            <button
-              className="secondary-button"
-              type="button"
-              onClick={() => void downloadAudit()}
-              disabled={isLoadingMembers}
-            >
-              {isLoadingMembers ? 'Gerando XLS...' : 'Baixar XLS'}
-            </button>
             <button
               className="secondary-button"
               type="button"
@@ -934,7 +905,7 @@ function TeamAuditItem({
               }}
               disabled={isLoadingMembers}
             >
-              Baixar CSV
+              {isLoadingMembers ? 'Gerando CSV...' : 'Baixar CSV'}
             </button>
           </div>
         </div>
@@ -1918,39 +1889,6 @@ function AccessUserRow({
       </div>
     </div>
   )
-}
-
-function downloadTeamMembers(teamName: string, members: TeamMember[]) {
-  const rows = members
-    .map(
-      (member) =>
-        `<tr><td>${escapeHtml(member.username ?? '-')}</td><td>${escapeHtml(member.name)}</td></tr>`,
-    )
-    .join('')
-
-  const content = `<!doctype html>
-<html>
-  <head>
-    <meta charset="utf-8" />
-    <table>
-      <tr><th>Matricula</th><th>Nome</th></tr>
-      ${rows}
-    </table>
-  </head>
-  <body></body>
-</html>`
-
-  const blob = new Blob([content], {
-    type: 'application/vnd.ms-excel;charset=utf-8;',
-  })
-  const url = URL.createObjectURL(blob)
-  const link = document.createElement('a')
-  link.href = url
-  link.download = `${slugify(teamName)}.xls`
-  document.body.appendChild(link)
-  link.click()
-  document.body.removeChild(link)
-  URL.revokeObjectURL(url)
 }
 
 function downloadTeamMembersCsv(teamName: string, members: TeamMember[]) {
