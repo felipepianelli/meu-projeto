@@ -7,7 +7,6 @@ import {
   addUsersToTeam,
   addTeamsToMissionAudience,
   addUsersToMissionAudience,
-  appendLocalMembersToTeam,
   clearUsersCache,
   createCollaborator,
   deleteCollaborator,
@@ -817,16 +816,6 @@ function MissionTeamItem({
       await addUsersToTeam(
         team.id,
         users.map((user) => user.id),
-      )
-
-      appendLocalMembersToTeam(
-        team.id,
-        users.map((user) => ({
-          id: user.id,
-          name: user.name,
-          username: user.username,
-          inSpreadsheet: true,
-        })),
       )
       clearUsersCache()
       const loadedMembers = await fetchMembersForTeam(team.id, { refresh: true })
