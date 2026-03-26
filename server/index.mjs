@@ -21,6 +21,13 @@ const host = process.env.HOST || '0.0.0.0'
 const supabaseUrl = process.env.SUPABASE_URL?.trim() || ''
 const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim() || ''
 const collaboratorsTable = process.env.SUPABASE_COLLABORATORS_TABLE?.trim() || 'collaborators'
+const skoreApiToken =
+  process.env.SKORE_API_TOKEN?.trim() || process.env.VITE_SKORE_API_TOKEN?.trim() || ''
+const skoreUsersUrl =
+  process.env.SKORE_USERS_URL?.trim() ||
+  process.env.VITE_SKORE_USERS_URL?.trim() ||
+  'https://knowledge.skore.io/workspace/v2/users'
+const teamAuditCacheTtlMs = 5 * 60 * 1000
 
 fs.mkdirSync(dbDir, { recursive: true })
 
@@ -33,6 +40,10 @@ const supabase = usingSupabase
       },
     })
   : null
+let activeUsersAuditCache = {
+  expiresAt: 0,
+  promise: null,
+}
 
 const app = express()
 const httpServer = createServer(app)
@@ -206,6 +217,113 @@ async function emitCollaboratorsChanged() {
     total: payload.total,
     updatedAt: payload.updatedAt,
   })
+}
+
+function getSkoreUsersHeaders() {
+  if (!skoreApiToken) {
+    throw new Error('SKORE_API_TOKEN nao configurado no backend.')
+  }
+
+  return {
+    Accept: 'application/json',
+    'Content-Type': 'application/json',
+    Authorization: skoreApiToken,
+  }
+}
+
+async function readJson(input, init) {
+  const response = await fetch(input, init)
+
+  if (!response.ok) {
+    throw new Error(`Falha na requisicao (${response.status})`)
+  }
+
+  return response.json()
+}
+
+async function fetchAllActiveUsersForAudit(options = {}) {
+  const refresh = Boolean(options.refresh)
+  const now = Date.now()
+
+  if (!refresh && activeUsersAuditCache.promise && activeUsersAuditCache.expiresAt > now) {
+    return activeUsersAuditCache.promise
+  }
+
+  const request = (async () => {
+    const users = []
+    let continuation
+
+    do {
+      const url = new URL(skoreUsersUrl)
+      url.searchParams.set('limit', '100')
+      url.searchParams.set('active', 'true')
+
+      if (continuation) {
+        url.searchParams.set('continuation', continuation)
+      }
+
+      const payload = await readJson(url.toString(), {
+        headers: getSkoreUsersHeaders(),
+      })
+
+      users.push(...(payload.results ?? []))
+      continuation = payload.continuation
+    } while (continuation)
+
+    return users
+  })()
+
+  activeUsersAuditCache = {
+    expiresAt: now + teamAuditCacheTtlMs,
+    promise: request,
+  }
+
+  try {
+    return await request
+  } catch (error) {
+    activeUsersAuditCache = {
+      expiresAt: 0,
+      promise: null,
+    }
+    throw error
+  }
+}
+
+function escapeCsvValue(value) {
+  return `"${String(value ?? '').replace(/"/g, '""')}"`
+}
+
+async function buildTeamAuditCsv(teamId) {
+  const [users, collaboratorsPayload] = await Promise.all([
+    fetchAllActiveUsersForAudit(),
+    getCollaboratorsPayload(),
+  ])
+  const collaboratorNamesByMatricula = new Map(
+    collaboratorsPayload.items.map((item) => [item.matricula, item.nome]),
+  )
+
+  const matchedUsers = users
+    .filter((user) => Array.isArray(user.teams) && user.teams.some((team) => team.id === teamId))
+    .map((user) => ({
+      id: user.id,
+      matricula: user.username ?? '-',
+      nome: collaboratorNamesByMatricula.get(user.username ?? '') || user.name || '-',
+    }))
+    .filter(
+      (member, index, array) =>
+        array.findIndex((candidate) => candidate.id === member.id) === index,
+    )
+    .sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'))
+
+  const rows = [
+    ['Matricula', 'Nome'],
+    ...matchedUsers.map((member) => [member.matricula, member.nome]),
+  ]
+
+  return {
+    count: matchedUsers.length,
+    content: `\ufeff${rows.map((row) => row.map(escapeCsvValue).join(',')).join('\n')}`,
+  }
 }
 
 async function createCollaboratorRecord({ matricula, nome }) {
@@ -424,6 +542,36 @@ app.get('/api/collaborators', async (_request, response, next) => {
     }
 
     response.json(await getCollaboratorsPayload())
+  } catch (error) {
+    next(error)
+  }
+})
+
+app.get('/api/team-audit/:teamId/csv', async (request, response, next) => {
+  try {
+    const teamId = Number(request.params.teamId)
+    const teamName = String(request.query.teamName ?? `time-${teamId}`).trim() || `time-${teamId}`
+
+    if (!Number.isFinite(teamId) || teamId <= 0) {
+      response.status(400).json({ error: 'Team ID invalido.' })
+      return
+    }
+
+    const { count, content } = await buildTeamAuditCsv(teamId)
+    const safeName = teamName
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-zA-Z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .toLowerCase() || `time-${teamId}`
+
+    response.setHeader('Content-Type', 'text/csv; charset=utf-8')
+    response.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${safeName}.csv"`,
+    )
+    response.setHeader('X-Team-Audit-Count', String(count))
+    response.send(content)
   } catch (error) {
     next(error)
   }
