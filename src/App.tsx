@@ -15,7 +15,6 @@ import {
   fetchCollaboratorMissionMatrix,
   fetchCollaboratorsDb,
   fetchMissionAudienceMembers,
-  fetchMembersForTeam,
   findUsersByMatriculas,
   removeTeamsFromMissionAudience,
   removeUsersFromMissionAudience,
@@ -770,47 +769,11 @@ function MissionTeamItem({
   canManage: boolean
 }) {
   const fileInputRef = useRef<HTMLInputElement | null>(null)
-  const [page, setPage] = useState(1)
   const [isUploading, setIsUploading] = useState(false)
-  const [isLoadingMembers, setIsLoadingMembers] = useState(false)
-  const [members, setMembers] = useState<TeamMember[]>(team.matchedMembers)
   const [uploadMessage, setUploadMessage] = useState<string | null>(null)
-  const totalPages = Math.max(1, Math.ceil(members.length / TEAM_PAGE_SIZE))
-  const startIndex = (page - 1) * TEAM_PAGE_SIZE
-  const visibleMembers = members.slice(startIndex, startIndex + TEAM_PAGE_SIZE)
-
-  function goToPreviousPage() {
-    setPage((current) => Math.max(1, current - 1))
-  }
-
-  function goToNextPage() {
-    setPage((current) => Math.min(totalPages, current + 1))
-  }
 
   function openFilePicker() {
     fileInputRef.current?.click()
-  }
-
-  async function loadMembers() {
-    setIsLoadingMembers(true)
-    setUploadMessage(null)
-
-    try {
-      const loadedMembers = await fetchMembersForTeam(team.id)
-      setMembers(loadedMembers)
-      setPage(1)
-      setUploadMessage(
-        `${loadedMembers.length} usuario(s) carregados para o time ${team.name}.`,
-      )
-    } catch (error) {
-      setUploadMessage(
-        error instanceof Error
-          ? error.message
-          : 'Falha ao carregar os usuarios deste time.',
-      )
-    } finally {
-      setIsLoadingMembers(false)
-    }
   }
 
   async function handleFileChange(event: React.ChangeEvent<HTMLInputElement>) {
@@ -841,11 +804,8 @@ function MissionTeamItem({
         users.map((user) => user.id),
       )
       clearUsersCache()
-      const loadedMembers = await fetchMembersForTeam(team.id, { refresh: true })
-      setMembers(loadedMembers)
-      setPage(1)
       setUploadMessage(
-        `${users.length} colaborador(es) enviados para atribuicao no time ${team.name}.`,
+        `${users.length} colaborador(es) enviados para participacao no time ${team.name}.`,
       )
     } catch (error) {
       setUploadMessage(
@@ -863,18 +823,9 @@ function MissionTeamItem({
         <strong>{team.name}</strong>
         <div className="mission-team-actions">
           <div className="entity-meta">
-            <span>{team.usersCount} atribuidos</span>
-            <span>{members.length} carregados</span>
+            <span>{team.usersCount} participantes</span>
           </div>
           <div className="team-action-group">
-            <button
-              className="secondary-button"
-              type="button"
-              onClick={() => void loadMembers()}
-              disabled={isLoadingMembers}
-            >
-              {isLoadingMembers ? 'Carregando...' : 'Carregar usuarios'}
-            </button>
             <button
               className="secondary-button"
               type="button"
@@ -882,14 +833,6 @@ function MissionTeamItem({
               disabled={isUploading || !canManage}
             >
               {isUploading ? 'Enviando...' : 'Atribuir Colaborador'}
-            </button>
-            <button
-              className="secondary-button"
-              type="button"
-              onClick={() => downloadTeamMembers(team.name, members)}
-              disabled={!members.length}
-            >
-              Baixar XLS
             </button>
           </div>
           <input
@@ -901,55 +844,6 @@ function MissionTeamItem({
           />
         </div>
       </div>
-
-      {members.length ? (
-        <div className="team-table-wrap">
-          <table className="team-table">
-            <thead>
-              <tr>
-                <th>Matricula</th>
-                <th>Nome</th>
-              </tr>
-            </thead>
-            <tbody>
-              {visibleMembers.map((member) => (
-                <tr key={`${team.id}-${member.id}`}>
-                  <td>{member.username ?? '-'}</td>
-                  <td>{member.name}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-
-          {members.length > TEAM_PAGE_SIZE ? (
-            <div className="table-pagination">
-              <button
-                className="secondary-button"
-                type="button"
-                onClick={goToPreviousPage}
-                disabled={page === 1}
-              >
-                Anterior
-              </button>
-              <span>
-                Pagina {page} de {totalPages}
-              </span>
-              <button
-                className="secondary-button"
-                type="button"
-                onClick={goToNextPage}
-                disabled={page === totalPages}
-              >
-                Proxima
-              </button>
-            </div>
-          ) : null}
-        </div>
-      ) : (
-        <p className="mission-empty">
-          Clique em `Carregar usuarios` para buscar todos os atribuidos deste time.
-        </p>
-      )}
 
       {!canManage ? (
         <p className="upload-feedback">Perfil de visualizacao: acoes de edicao estao bloqueadas.</p>
@@ -1010,7 +904,37 @@ function TeamAuditItem({
               onClick={() => void loadMembers()}
               disabled={isLoadingMembers}
             >
-              {isLoadingMembers ? 'Auditando...' : 'Auditar time'}
+              {isLoadingMembers ? 'Carregando...' : 'Carregar usuarios'}
+            </button>
+            <button
+              className="secondary-button"
+              type="button"
+              onClick={async () => {
+                setIsLoadingMembers(true)
+                setFeedback(null)
+
+                try {
+                  const loadedMembers = await fetchAuditedMembersForTeam(team.id, undefined, {
+                    refresh: true,
+                  })
+                  setMembers(loadedMembers)
+                  setPage(1)
+                  setFeedback(
+                    `${loadedMembers.length} usuario(s) auditados para o time ${team.name}.`,
+                  )
+                } catch (error) {
+                  setFeedback(
+                    error instanceof Error
+                      ? error.message
+                      : 'Falha ao auditar os usuarios deste time.',
+                  )
+                } finally {
+                  setIsLoadingMembers(false)
+                }
+              }}
+              disabled={isLoadingMembers}
+            >
+              Atualizar auditoria
             </button>
             <button
               className="secondary-button"
@@ -1069,7 +993,7 @@ function TeamAuditItem({
         </div>
       ) : (
         <p className="mission-empty">
-          Clique em `Auditar time` para expandir os usuarios reais encontrados no historico atual da plataforma.
+          Clique em `Carregar usuarios` para expandir os usuarios reais encontrados no historico atual da plataforma.
         </p>
       )}
 
