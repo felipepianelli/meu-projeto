@@ -867,10 +867,6 @@ function TeamAuditItem({
   const [isLoadingMembers, setIsLoadingMembers] = useState(false)
   const [feedback, setFeedback] = useState<string | null>(null)
 
-  useEffect(() => {
-    void fetchAuditedMembersForTeam(team.id).catch(() => undefined)
-  }, [team.id])
-
   return (
     <div className="mission-team-card">
       <div className="mission-team-head">
