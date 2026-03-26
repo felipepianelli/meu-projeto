@@ -141,5 +141,5 @@ export const mockDashboardData: DashboardData = {
 export const mockConnectionStatus: ConnectionStatus = {
   connected: true,
   mode: 'mock',
-  label: 'Modo demonstracao',
+  label: 'Painel online',
 }
