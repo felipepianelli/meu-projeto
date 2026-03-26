@@ -37,6 +37,7 @@ import type {
 const navItems: NavItem[] = [
   { label: 'Overview', icon: 'grid' },
   { label: 'Missoes', icon: 'book' },
+  { label: 'Certificados', icon: 'report' },
   { label: 'Times', icon: 'users' },
   { label: 'Colaboradores', icon: 'users' },
   { label: 'Matriz', icon: 'table' },
@@ -571,6 +572,27 @@ function App() {
           </>
         ) : null}
 
+        {activeTab === 'Certificados' ? (
+          <section className="mission-users-grid">
+            <article className="card sync-card">
+              <div className="card-header">
+                <h3>Certificados por Missao</h3>
+              </div>
+
+              <p className="mission-empty">
+                Abra o relatorio da universidade ja filtrado pela missao para consultar os
+                certificados daquela carga.
+              </p>
+
+              <div className="mission-team-list">
+                {missionAudienceCatalog.map((mission) => (
+                  <CertificateMissionItem key={mission.id} mission={mission} />
+                ))}
+              </div>
+            </article>
+          </section>
+        ) : null}
+
         {activeTab === 'Times' ? (
           <section className="mission-users-grid">
             <article className="card sync-card">
@@ -910,6 +932,34 @@ function TeamAuditItem({
       </p>
 
       {feedback ? <p className="upload-feedback">{feedback}</p> : null}
+    </div>
+  )
+}
+
+function CertificateMissionItem({
+  mission,
+}: {
+  mission: (typeof missionAudienceCatalog)[number]
+}) {
+  return (
+    <div className="mission-team-card">
+      <div className="mission-team-head">
+        <strong>{mission.name}</strong>
+        <div className="mission-team-actions">
+          <div className="entity-meta">
+            <span>ID da missao: {mission.id}</span>
+          </div>
+          <div className="team-action-group">
+            <button
+              className="secondary-button"
+              type="button"
+              onClick={() => openMissionCertificatesReport(mission.id, mission.name)}
+            >
+              Abrir certificados
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   )
 }
@@ -1919,6 +1969,18 @@ function downloadMissionAudienceMembers(
   link.click()
   document.body.removeChild(link)
   URL.revokeObjectURL(url)
+}
+
+function openMissionCertificatesReport(missionId: string, missionName: string) {
+  const url = new URL('https://universidadesimpar.skore.io/reports/1206')
+  url.searchParams.set('Tipo', 'mission')
+  url.searchParams.set('ID da Missao', missionId)
+  url.searchParams.set('Nome da Missao', missionName)
+  url.searchParams.set('Conteudo Deletado?', 'No')
+  url.searchParams.set('Usuario Ativo?', 'Yes')
+  url.searchParams.set('Usuario Deletado?', 'No')
+
+  window.open(url.toString(), '_blank', 'noopener,noreferrer')
 }
 
 function downloadCollaboratorMissionMatrix(data: CollaboratorMissionMatrix) {
