@@ -858,24 +858,20 @@ function TeamAuditItem({
 }: {
   team: TeamSummary
 }) {
-  const [page, setPage] = useState(1)
   const [isLoadingMembers, setIsLoadingMembers] = useState(false)
-  const [members, setMembers] = useState<TeamMember[]>([])
   const [feedback, setFeedback] = useState<string | null>(null)
-  const totalPages = Math.max(1, Math.ceil(members.length / TEAM_PAGE_SIZE))
-  const startIndex = (page - 1) * TEAM_PAGE_SIZE
-  const visibleMembers = members.slice(startIndex, startIndex + TEAM_PAGE_SIZE)
 
-  async function loadMembers() {
+  async function downloadAudit() {
     setIsLoadingMembers(true)
     setFeedback(null)
 
     try {
-      const loadedMembers = await fetchAuditedMembersForTeam(team.id)
-      setMembers(loadedMembers)
-      setPage(1)
+      const loadedMembers = await fetchAuditedMembersForTeam(team.id, undefined, {
+        refresh: true,
+      })
+      downloadTeamMembers(team.name, loadedMembers)
       setFeedback(
-        `${loadedMembers.length} usuario(s) auditados para o time ${team.name}.`,
+        `${loadedMembers.length} participante(s) auditados e baixados para o time ${team.name}.`,
       )
     } catch (error) {
       setFeedback(
@@ -894,108 +890,24 @@ function TeamAuditItem({
         <strong>{team.name}</strong>
         <div className="mission-team-actions">
           <div className="entity-meta">
-            <span>{team.usersCount} atribuidos no site</span>
-            <span>{members.length} auditados</span>
+            <span>{team.usersCount} participantes no site</span>
           </div>
           <div className="team-action-group">
             <button
               className="secondary-button"
               type="button"
-              onClick={() => void loadMembers()}
+              onClick={() => void downloadAudit()}
               disabled={isLoadingMembers}
             >
-              {isLoadingMembers ? 'Carregando...' : 'Carregar usuarios'}
-            </button>
-            <button
-              className="secondary-button"
-              type="button"
-              onClick={async () => {
-                setIsLoadingMembers(true)
-                setFeedback(null)
-
-                try {
-                  const loadedMembers = await fetchAuditedMembersForTeam(team.id, undefined, {
-                    refresh: true,
-                  })
-                  setMembers(loadedMembers)
-                  setPage(1)
-                  setFeedback(
-                    `${loadedMembers.length} usuario(s) auditados para o time ${team.name}.`,
-                  )
-                } catch (error) {
-                  setFeedback(
-                    error instanceof Error
-                      ? error.message
-                      : 'Falha ao auditar os usuarios deste time.',
-                  )
-                } finally {
-                  setIsLoadingMembers(false)
-                }
-              }}
-              disabled={isLoadingMembers}
-            >
-              Atualizar auditoria
-            </button>
-            <button
-              className="secondary-button"
-              type="button"
-              onClick={() => downloadTeamMembers(team.name, members)}
-              disabled={!members.length}
-            >
-              Baixar XLS
+              {isLoadingMembers ? 'Gerando XLS...' : 'Baixar XLS'}
             </button>
           </div>
         </div>
       </div>
 
-      {members.length ? (
-        <div className="team-table-wrap">
-          <table className="team-table">
-            <thead>
-              <tr>
-                <th>Matricula</th>
-                <th>Nome</th>
-              </tr>
-            </thead>
-            <tbody>
-              {visibleMembers.map((member) => (
-                <tr key={`${team.id}-audit-${member.id}`}>
-                  <td>{member.username ?? '-'}</td>
-                  <td>{member.name}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-
-          {members.length > TEAM_PAGE_SIZE ? (
-            <div className="table-pagination">
-              <button
-                className="secondary-button"
-                type="button"
-                onClick={() => setPage((current) => Math.max(1, current - 1))}
-                disabled={page === 1}
-              >
-                Anterior
-              </button>
-              <span>
-                Pagina {page} de {totalPages}
-              </span>
-              <button
-                className="secondary-button"
-                type="button"
-                onClick={() => setPage((current) => Math.min(totalPages, current + 1))}
-                disabled={page === totalPages}
-              >
-                Proxima
-              </button>
-            </div>
-          ) : null}
-        </div>
-      ) : (
-        <p className="mission-empty">
-          Clique em `Carregar usuarios` para expandir os usuarios reais encontrados no historico atual da plataforma.
-        </p>
-      )}
+      <p className="mission-empty">
+        Clique em `Baixar XLS` para gerar a auditoria completa dos participantes deste time.
+      </p>
 
       {feedback ? <p className="upload-feedback">{feedback}</p> : null}
     </div>
