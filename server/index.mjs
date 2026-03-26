@@ -28,6 +28,7 @@ const skoreUsersUrl =
   process.env.VITE_SKORE_USERS_URL?.trim() ||
   'https://knowledge.skore.io/workspace/v2/users'
 const teamAuditCacheTtlMs = 5 * 60 * 1000
+const collaboratorAuditBatchSize = 12
 
 fs.mkdirSync(dbDir, { recursive: true })
 
@@ -41,6 +42,10 @@ const supabase = usingSupabase
     })
   : null
 let activeUsersAuditCache = {
+  expiresAt: 0,
+  promise: null,
+}
+let collaboratorUsersAuditCache = {
   expiresAt: 0,
   promise: null,
 }
@@ -241,39 +246,66 @@ async function readJson(input, init) {
   return response.json()
 }
 
-async function fetchAllActiveUsersForAudit(options = {}) {
+function escapeCsvValue(value) {
+  return `"${String(value ?? '').replace(/"/g, '""')}"`
+}
+
+async function fetchUsersByMatriculasForAudit(matriculas) {
+  const normalized = Array.from(new Set(matriculas.map((item) => String(item ?? '').trim()).filter(Boolean)))
+  const results = []
+
+  for (let index = 0; index < normalized.length; index += collaboratorAuditBatchSize) {
+    const batch = normalized.slice(index, index + collaboratorAuditBatchSize)
+    const settled = await Promise.allSettled(
+      batch.map(async (matricula) => {
+        const url = new URL(skoreUsersUrl)
+        url.searchParams.set('username__eq', matricula)
+        url.searchParams.set('find_exact_match', 'true')
+        url.searchParams.set('limit', '2')
+        url.searchParams.set('active', 'true')
+
+        const payload = await readJson(url.toString(), {
+          headers: getSkoreUsersHeaders(),
+        })
+
+        return payload.results?.[0] ?? null
+      }),
+    )
+
+    settled.forEach((item) => {
+      if (item.status === 'fulfilled' && item.value) {
+        results.push(item.value)
+      }
+    })
+  }
+
+  return results
+}
+
+async function fetchCollaboratorUsersForAudit(options = {}) {
   const refresh = Boolean(options.refresh)
   const now = Date.now()
 
-  if (!refresh && activeUsersAuditCache.promise && activeUsersAuditCache.expiresAt > now) {
-    return activeUsersAuditCache.promise
+  if (!refresh && collaboratorUsersAuditCache.promise && collaboratorUsersAuditCache.expiresAt > now) {
+    return collaboratorUsersAuditCache.promise
   }
 
   const request = (async () => {
-    const users = []
-    let continuation
+    const collaboratorsPayload = await getCollaboratorsPayload()
+    const collaboratorNamesByMatricula = new Map(
+      collaboratorsPayload.items.map((item) => [item.matricula, item.nome]),
+    )
+    const users = await fetchUsersByMatriculasForAudit(
+      collaboratorsPayload.items.map((item) => item.matricula),
+    )
 
-    do {
-      const url = new URL(skoreUsersUrl)
-      url.searchParams.set('limit', '100')
-      url.searchParams.set('active', 'true')
-
-      if (continuation) {
-        url.searchParams.set('continuation', continuation)
-      }
-
-      const payload = await readJson(url.toString(), {
-        headers: getSkoreUsersHeaders(),
-      })
-
-      users.push(...(payload.results ?? []))
-      continuation = payload.continuation
-    } while (continuation)
-
-    return users
+    return users.map((user) => ({
+      ...user,
+      resolvedName: collaboratorNamesByMatricula.get(user.username ?? '') || user.name || '-',
+    }))
   })()
 
-  activeUsersAuditCache = {
+  collaboratorUsersAuditCache = {
     expiresAt: now + teamAuditCacheTtlMs,
     promise: request,
   }
@@ -281,7 +313,7 @@ async function fetchAllActiveUsersForAudit(options = {}) {
   try {
     return await request
   } catch (error) {
-    activeUsersAuditCache = {
+    collaboratorUsersAuditCache = {
       expiresAt: 0,
       promise: null,
     }
@@ -289,25 +321,15 @@ async function fetchAllActiveUsersForAudit(options = {}) {
   }
 }
 
-function escapeCsvValue(value) {
-  return `"${String(value ?? '').replace(/"/g, '""')}"`
-}
-
 async function buildTeamAuditCsv(teamId) {
-  const [users, collaboratorsPayload] = await Promise.all([
-    fetchAllActiveUsersForAudit(),
-    getCollaboratorsPayload(),
-  ])
-  const collaboratorNamesByMatricula = new Map(
-    collaboratorsPayload.items.map((item) => [item.matricula, item.nome]),
-  )
+  const users = await fetchCollaboratorUsersForAudit()
 
   const matchedUsers = users
     .filter((user) => Array.isArray(user.teams) && user.teams.some((team) => team.id === teamId))
     .map((user) => ({
       id: user.id,
       matricula: user.username ?? '-',
-      nome: collaboratorNamesByMatricula.get(user.username ?? '') || user.name || '-',
+      nome: user.resolvedName,
     }))
     .filter(
       (member, index, array) =>
