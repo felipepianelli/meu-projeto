@@ -54,6 +54,7 @@ const ACCESS_USERS_KEY = 'skore_manager_access_users'
 function App() {
   const [activeTab, setActiveTab] = useState('Overview')
   const [timesSubTab, setTimesSubTab] = useState<'assign' | 'audit'>('assign')
+  const [certificateIdInput, setCertificateIdInput] = useState('')
   const [showLoginPanel, setShowLoginPanel] = useState(false)
   const [accessUsersState, setAccessUsersState] = useState<AccessUser[]>(() =>
     getStoredAccessUsers(),
@@ -583,6 +584,30 @@ function App() {
                 Abra o relatorio da universidade ja filtrado pela missao para consultar os
                 certificados daquela carga.
               </p>
+
+              <div className="entity-item">
+                <div className="entity-main">
+                  <strong>Abrir certificado por ID</strong>
+                  <p>Cole o valor de `certificates.id` para abrir direto a visualizacao.</p>
+                </div>
+                <div className="entity-meta">
+                  <input
+                    className="search-input"
+                    type="text"
+                    value={certificateIdInput}
+                    onChange={(event) => setCertificateIdInput(event.target.value)}
+                    placeholder="Ex.: 14092_6LV6UAOtWlFBKUUB9Cn2_1993546"
+                  />
+                  <button
+                    className="secondary-button"
+                    type="button"
+                    disabled={!certificateIdInput.trim()}
+                    onClick={() => openCertificatePreview(certificateIdInput)}
+                  >
+                    Ver certificado
+                  </button>
+                </div>
+              </div>
 
               <div className="mission-team-list">
                 {missionAudienceCatalog.map((mission) => (
@@ -1979,6 +2004,20 @@ function openMissionCertificatesReport(missionId: string, missionName: string) {
   url.searchParams.set('Conteudo Deletado?', 'No')
   url.searchParams.set('Usuario Ativo?', 'Yes')
   url.searchParams.set('Usuario Deletado?', 'No')
+
+  window.open(url.toString(), '_blank', 'noopener,noreferrer')
+}
+
+function openCertificatePreview(certificateId: string) {
+  const normalized = certificateId.trim()
+
+  if (!normalized) {
+    return
+  }
+
+  const url = new URL('https://universidadesimpar.skore.io/plugins/certificates')
+  url.searchParams.set('page', 'preview')
+  url.searchParams.set('id', normalized)
 
   window.open(url.toString(), '_blank', 'noopener,noreferrer')
 }
