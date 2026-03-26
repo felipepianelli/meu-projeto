@@ -908,7 +908,7 @@ function TeamAuditItem({
       </div>
 
       <p className="mission-empty">
-        Clique em `Baixar XLS` para gerar a auditoria completa dos participantes deste time.
+        Clique em `Baixar CSV` para gerar a auditoria completa dos participantes deste time.
       </p>
 
       {feedback ? <p className="upload-feedback">{feedback}</p> : null}
