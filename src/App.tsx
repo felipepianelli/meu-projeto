@@ -596,6 +596,12 @@ function App() {
                 </button>
               </div>
 
+              {timesSubTab === 'audit' ? (
+                <p className="mission-empty">
+                  A auditoria dos times e preparada em segundo plano durante esta sessao para acelerar os downloads.
+                </p>
+              ) : null}
+
               <div className="mission-team-list">
                 {teams.map((team) =>
                   timesSubTab === 'assign' ? (
@@ -861,14 +867,16 @@ function TeamAuditItem({
   const [isLoadingMembers, setIsLoadingMembers] = useState(false)
   const [feedback, setFeedback] = useState<string | null>(null)
 
+  useEffect(() => {
+    void fetchAuditedMembersForTeam(team.id).catch(() => undefined)
+  }, [team.id])
+
   async function downloadAudit() {
     setIsLoadingMembers(true)
     setFeedback(null)
 
     try {
-      const loadedMembers = await fetchAuditedMembersForTeam(team.id, undefined, {
-        refresh: true,
-      })
+      const loadedMembers = await fetchAuditedMembersForTeam(team.id)
       downloadTeamMembers(team.name, loadedMembers)
       setFeedback(
         `${loadedMembers.length} participante(s) auditados e baixados para o time ${team.name}.`,
@@ -900,6 +908,33 @@ function TeamAuditItem({
               disabled={isLoadingMembers}
             >
               {isLoadingMembers ? 'Gerando XLS...' : 'Baixar XLS'}
+            </button>
+            <button
+              className="secondary-button"
+              type="button"
+              onClick={async () => {
+                setIsLoadingMembers(true)
+                setFeedback(null)
+
+                try {
+                  const loadedMembers = await fetchAuditedMembersForTeam(team.id)
+                  downloadTeamMembersCsv(team.name, loadedMembers)
+                  setFeedback(
+                    `${loadedMembers.length} participante(s) auditados e baixados em CSV para o time ${team.name}.`,
+                  )
+                } catch (error) {
+                  setFeedback(
+                    error instanceof Error
+                      ? error.message
+                      : 'Falha ao auditar os usuarios deste time.',
+                  )
+                } finally {
+                  setIsLoadingMembers(false)
+                }
+              }}
+              disabled={isLoadingMembers}
+            >
+              Baixar CSV
             </button>
           </div>
         </div>
@@ -1912,6 +1947,31 @@ function downloadTeamMembers(teamName: string, members: TeamMember[]) {
   const link = document.createElement('a')
   link.href = url
   link.download = `${slugify(teamName)}.xls`
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+  URL.revokeObjectURL(url)
+}
+
+function downloadTeamMembersCsv(teamName: string, members: TeamMember[]) {
+  const rows = [
+    ['Matricula', 'Nome'],
+    ...members.map((member) => [member.username ?? '-', member.name]),
+  ]
+
+  const content = rows
+    .map((row) =>
+      row.map((value) => `"${String(value).replace(/"/g, '""')}"`).join(','),
+    )
+    .join('\n')
+
+  const blob = new Blob([`\ufeff${content}`], {
+    type: 'text/csv;charset=utf-8;',
+  })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = `${slugify(teamName)}.csv`
   document.body.appendChild(link)
   link.click()
   document.body.removeChild(link)
