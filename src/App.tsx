@@ -117,6 +117,12 @@ function App() {
     setShowLoginPanel(true)
   }
 
+  useEffect(() => {
+    if (!currentAccessUser) {
+      setShowLoginPanel(true)
+    }
+  }, [currentAccessUser])
+
   async function refreshCollaboratorSources(options?: { refreshDashboard?: boolean }) {
     const nextCollaborators = await syncCollaboratorsFromServer()
     setCollaboratorsDb(nextCollaborators)
@@ -2080,7 +2086,7 @@ function downloadHtmlTableAsXls(fileName: string, content: string) {
 }
 
 function getInitialAccessUser() {
-  return getInitialAccessUserFromList(defaultAccessUsers)
+  return getInitialAccessUserFromList(getStoredAccessUsers())
 }
 
 function persistAccessUser(user: AccessUser) {
@@ -2128,17 +2134,16 @@ function persistAccessUsers(users: AccessUser[]) {
 
 function getInitialAccessUserFromList(users: AccessUser[]) {
   if (typeof window === 'undefined') {
-    return users[0]
+    return null
   }
 
   const storedUsername = window.localStorage.getItem(ACCESS_SESSION_KEY)
 
   if (!storedUsername) {
-    window.localStorage.setItem(ACCESS_SESSION_KEY, users[0].username)
-    return users[0]
+    return null
   }
 
-  return users.find((user) => user.username === storedUsername) ?? users[0]
+  return users.find((user) => user.username === storedUsername) ?? null
 }
 
 function formatAccessRoleLabel(role?: AccessUser['role']) {
