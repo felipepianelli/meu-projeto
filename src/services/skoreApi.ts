@@ -15,7 +15,6 @@ import type {
 } from '../types'
 
 const LOCAL_STORAGE_TOKEN_KEY = 'skore_manager_token'
-const LOCAL_ASSIGNMENTS_KEY = 'skore_manager_team_assignments'
 const LOCAL_MISSION_AUDIENCE_KEY = 'skore_manager_mission_audience_overrides'
 const LOCAL_COLLABORATORS_KEY = 'skore_manager_collaborators_db'
 const LOCAL_COLLABORATORS_SYNC_KEY = 'skore_manager_collaborators_synced_at'
@@ -344,6 +343,18 @@ type SkoreUsersSearchResponse = {
   continuation?: string
 }
 
+type SkoreTeamDetailApiItem = {
+  id: number
+  name: string
+  usersCount: number
+  spacesCount: number
+  createdAt: number
+  updatedAt?: number
+  userIds?: number[]
+  spaceIds?: number[]
+  companyId?: number
+}
+
 type SkoreUserDetailApiItem = {
   id: number
   name: string
@@ -385,22 +396,6 @@ function mapTeam(
   }
 }
 
-let teamMembersCache:
-  | Promise<{
-      generatedAt: string | null
-      teams: Array<{
-        id: number
-        name: string
-        usersCount: number
-        members: Array<{
-          id: number
-          name: string
-          username: string | null
-        }>
-      }>
-    }>
-  | null = null
-
 let missionOverviewCache:
   | Promise<{
       missionStatus: DashboardData['missionStatus']
@@ -412,32 +407,6 @@ let missionOverviewCache:
 
 let collaboratorMatrixCache: Promise<CollaboratorMissionMatrix> | null = null
 let collaboratorsSocket: Socket | null = null
-
-function readLocalAssignments() {
-  if (typeof window === 'undefined') {
-    return {} as Record<string, TeamMember[]>
-  }
-
-  const raw = window.localStorage.getItem(LOCAL_ASSIGNMENTS_KEY)
-
-  if (!raw) {
-    return {} as Record<string, TeamMember[]>
-  }
-
-  try {
-    return JSON.parse(raw) as Record<string, TeamMember[]>
-  } catch {
-    return {} as Record<string, TeamMember[]>
-  }
-}
-
-function writeLocalAssignments(value: Record<string, TeamMember[]>) {
-  if (typeof window === 'undefined') {
-    return
-  }
-
-  window.localStorage.setItem(LOCAL_ASSIGNMENTS_KEY, JSON.stringify(value))
-}
 
 type MissionAudienceOverride = {
   audience: Array<{
@@ -495,33 +464,29 @@ function getMissionDefinitionWithOverrides(missionId: string) {
 
 export async function fetchMembersForTeam(
   teamId: number,
-  options?: { refresh?: boolean },
+  _options?: { refresh?: boolean },
 ): Promise<TeamMember[]> {
-  if (options?.refresh) {
-    teamMembersCache = null
+  const team = await readJson<SkoreTeamDetailApiItem>(`${getTeamsUrl()}/${teamId}`, {
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+      ...getAuthHeaders(),
+    },
+  })
+
+  const userIds = Array.from(new Set(team.userIds ?? []))
+
+  if (!userIds.length) {
+    return []
   }
 
-  if (!teamMembersCache) {
-    teamMembersCache = readJson(new URL('./team-members-cache.json', window.location.href).toString())
-  }
-  let payload
-
-  try {
-    payload = await teamMembersCache
-  } catch (error) {
-    teamMembersCache = null
-    throw error
-  }
-
-  const team = payload.teams.find((item) => item.id === teamId)
-  const localAssignments = readLocalAssignments()
-  const localMembers = localAssignments[String(teamId)] ?? []
-  const mergedMembers = [...(team?.members ?? []), ...localMembers]
-  const dedupedMembers = mergedMembers.filter(
-    (member, index, array) => array.findIndex((item) => item.id === member.id) === index,
+  const userDetailsCache = new Map<string, Promise<SkoreUserDetailApiItem | null>>()
+  const users = await Promise.all(
+    userIds.map((userId) => fetchUserDetailCached(String(userId), userDetailsCache)),
   )
 
-  return dedupedMembers
+  return users
+    .filter((user): user is SkoreUserDetailApiItem => Boolean(user))
     .map((user) => ({
       id: user.id,
       name:
@@ -536,21 +501,8 @@ export async function fetchMembersForTeam(
 }
 
 export function clearUsersCache() {
-  teamMembersCache = null
   missionOverviewCache = null
   collaboratorMatrixCache = null
-}
-
-export function appendLocalMembersToTeam(teamId: number, members: TeamMember[]) {
-  const assignments = readLocalAssignments()
-  const current = assignments[String(teamId)] ?? []
-  const merged = [...current, ...members]
-
-  assignments[String(teamId)] = merged.filter(
-    (member, index, array) => array.findIndex((item) => item.id === member.id) === index,
-  )
-
-  writeLocalAssignments(assignments)
 }
 
 export async function findUsersByMatriculas(
