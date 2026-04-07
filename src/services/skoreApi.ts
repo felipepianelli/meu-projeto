@@ -1586,11 +1586,23 @@ async function buildCollaboratorMissionMatrix(
   signal?: AbortSignal,
 ): Promise<CollaboratorMissionMatrix> {
   const { collaboratorRows } = getCollaboratorContext()
+  const activeUsers = await fetchAllActiveUsers(signal)
+  const teamNamesByMatricula = new Map(
+    activeUsers
+      .filter((user) => user.username)
+      .map((user) => [
+        user.username ?? '',
+        Array.from(new Set((user.teams ?? []).map((team) => team.name))).sort((a, b) =>
+          a.localeCompare(b, 'pt-BR'),
+        ),
+      ]),
+  )
   const collaborators = collaboratorRows
     .map((item) => ({
       matricula: item.matricula,
       name: item.nome,
       missionNames: [] as string[],
+      teamNames: teamNamesByMatricula.get(item.matricula) ?? [],
     }))
     .sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'))
   const rowsByMatricula = new Map(collaborators.map((item) => [item.matricula, item]))
