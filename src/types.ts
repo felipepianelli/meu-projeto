@@ -139,3 +139,15 @@ export type MissionReportRow = {
   status: 'COMPLETED' | 'IN_PROGRESS' | 'NOT_STARTED'
   completedAtLabel: string | null
 }
+
+export type MissionCertificateRecord = {
+  certificateId: string
+  matricula: string
+  name: string
+  email: string | null
+  missionId: string
+  missionName: string
+  certificateType: string
+  certificateTemplateId: string | null
+  issuedAtLabel: string | null
+}
