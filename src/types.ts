@@ -153,3 +153,10 @@ export type MissionCertificateRecord = {
   certificateTemplateId: string | null
   issuedAtLabel: string | null
 }
+
+export type MissionCompletedCollaboratorRecord = {
+  userId: string
+  matricula: string
+  name: string
+  completedAtLabel: string | null
+}

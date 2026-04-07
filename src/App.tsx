@@ -14,7 +14,7 @@ import {
   fetchAllMissionReportRows,
   fetchCollaboratorMissionMatrix,
   fetchCollaboratorsDb,
-  fetchMissionCertificates,
+  fetchCompletedCollaboratorsForMission,
   fetchMissionAudienceMembers,
   findUsersByMatriculas,
   importCollaborators,
@@ -28,7 +28,7 @@ import type {
   AccessUser,
   CollaboratorRecord,
   CollaboratorMissionMatrix,
-  MissionCertificateRecord,
+  MissionCompletedCollaboratorRecord,
   MissionAudienceSummary,
   MissionStatusMetric,
   NavItem,
@@ -57,7 +57,6 @@ const ACCESS_USERS_KEY = 'skore_manager_access_users'
 function App() {
   const [activeTab, setActiveTab] = useState('Overview')
   const [timesSubTab, setTimesSubTab] = useState<'assign' | 'audit'>('assign')
-  const [certificateIdInput, setCertificateIdInput] = useState('')
   const [showLoginPanel, setShowLoginPanel] = useState(false)
   const [accessUsersState, setAccessUsersState] = useState<AccessUser[]>(() =>
     getStoredAccessUsers(),
@@ -601,32 +600,8 @@ function App() {
               </div>
 
               <p className="mission-empty">
-                Tente carregar os certificados da missao diretamente dentro do sistema.
+                Clique em uma missao para ver as pessoas com status completed nessa carga.
               </p>
-
-              <div className="entity-item">
-                <div className="entity-main">
-                  <strong>Abrir certificado por ID</strong>
-                  <p>Cole o valor de `certificates.id` para abrir direto a visualizacao.</p>
-                </div>
-                <div className="entity-meta">
-                  <input
-                    className="search-input"
-                    type="text"
-                    value={certificateIdInput}
-                    onChange={(event) => setCertificateIdInput(event.target.value)}
-                    placeholder="Ex.: 14092_6LV6UAOtWlFBKUUB9Cn2_1993546"
-                  />
-                  <button
-                    className="secondary-button"
-                    type="button"
-                    disabled={!certificateIdInput.trim()}
-                    onClick={() => openCertificatePreview(certificateIdInput)}
-                  >
-                    Ver certificado
-                  </button>
-                </div>
-              </div>
 
               <div className="mission-team-list">
                 {missionAudienceCatalog.map((mission) => (
@@ -988,21 +963,21 @@ function CertificateMissionItem({
 }) {
   const [isLoading, setIsLoading] = useState(false)
   const [feedback, setFeedback] = useState<string | null>(null)
-  const [certificates, setCertificates] = useState<MissionCertificateRecord[]>([])
+  const [completedUsers, setCompletedUsers] = useState<MissionCompletedCollaboratorRecord[]>([])
 
   async function handleLoadCertificates() {
     setIsLoading(true)
     setFeedback(null)
 
     try {
-      const loaded = await fetchMissionCertificates(mission.id)
-      setCertificates(loaded)
-      setFeedback(`${loaded.length} certificado(s) carregado(s) para ${mission.name}.`)
+      const loaded = await fetchCompletedCollaboratorsForMission(mission.id)
+      setCompletedUsers(loaded)
+      setFeedback(`${loaded.length} pessoa(s) com missao concluida em ${mission.name}.`)
     } catch (error) {
       setFeedback(
         error instanceof Error
           ? error.message
-          : 'Falha ao carregar os certificados desta missao.',
+          : 'Falha ao carregar os concluintes desta missao.',
       )
     } finally {
       setIsLoading(false)
@@ -1031,24 +1006,16 @@ function CertificateMissionItem({
 
       {feedback ? <p className="upload-feedback">{feedback}</p> : null}
 
-      {certificates.length ? (
+      {completedUsers.length ? (
         <div className="entity-list">
-          {certificates.map((certificate) => (
-            <div key={certificate.certificateId} className="entity-item">
+          {completedUsers.map((user) => (
+            <div key={`${mission.id}-${user.userId}`} className="entity-item">
               <div className="entity-main">
-                <strong>{certificate.name}</strong>
-                <p>{certificate.matricula}</p>
+                <strong>{user.name}</strong>
+                <p>{user.matricula}</p>
               </div>
               <div className="entity-meta">
-                <span>{certificate.missionName}</span>
-                <span>{certificate.issuedAtLabel ?? 'Data nao informada'}</span>
-                <button
-                  className="secondary-button"
-                  type="button"
-                  onClick={() => openCertificatePreview(certificate.certificateId)}
-                >
-                  Ver certificado
-                </button>
+                <span>{user.completedAtLabel ?? 'Data nao informada'}</span>
               </div>
             </div>
           ))}
@@ -2093,20 +2060,6 @@ function downloadMissionAudienceMembers(
   link.click()
   document.body.removeChild(link)
   URL.revokeObjectURL(url)
-}
-
-function openCertificatePreview(certificateId: string) {
-  const normalized = certificateId.trim()
-
-  if (!normalized) {
-    return
-  }
-
-  const url = new URL('https://universidadesimpar.skore.io/plugins/certificates')
-  url.searchParams.set('page', 'preview')
-  url.searchParams.set('id', normalized)
-
-  window.open(url.toString(), '_blank', 'noopener,noreferrer')
 }
 
 function downloadCollaboratorMissionMatrix(data: CollaboratorMissionMatrix) {
