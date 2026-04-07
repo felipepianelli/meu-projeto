@@ -122,6 +122,7 @@ export type CollaboratorMissionRow = {
   matricula: string
   name: string
   missionNames: string[]
+  teamNames: string[]
 }
 
 export type CollaboratorMissionMatrix = {
