@@ -1586,7 +1586,10 @@ async function buildCollaboratorMissionMatrix(
   signal?: AbortSignal,
 ): Promise<CollaboratorMissionMatrix> {
   const { collaboratorRows } = getCollaboratorContext()
-  const activeUsers = await fetchAllActiveUsers(signal)
+  const activeUsers = await findUsersByMatriculas(
+    collaboratorRows.map((item) => item.matricula),
+    signal,
+  )
   const teamNamesByMatricula = new Map(
     activeUsers
       .filter((user) => user.username)
