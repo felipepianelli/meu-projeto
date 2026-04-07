@@ -414,6 +414,85 @@ async function createCollaboratorRecord({ matricula, nome }) {
   }
 }
 
+async function replaceCollaboratorsRecords(records) {
+  const normalizedItems = Array.from(
+    new Map(
+      records
+        .map((item) => ({
+          matricula: String(item?.matricula ?? '').trim(),
+          nome: String(item?.nome ?? '').trim(),
+        }))
+        .filter((item) => item.matricula && item.nome)
+        .map((item) => [item.matricula, item]),
+    ).values(),
+  ).sort((a, b) => {
+    const nameDiff = a.nome.localeCompare(b.nome, 'pt-BR')
+
+    if (nameDiff !== 0) {
+      return nameDiff
+    }
+
+    return a.matricula.localeCompare(b.matricula, 'pt-BR')
+  })
+
+  if (!normalizedItems.length) {
+    throw new Error('A lista de colaboradores ativos veio vazia.')
+  }
+
+  if (supabase) {
+    const { data: existingRows, error: existingError } = await supabase
+      .from(collaboratorsTable)
+      .select('matricula')
+
+    if (existingError) {
+      throw existingError
+    }
+
+    if (existingRows?.length) {
+      const { error: deleteError } = await supabase
+        .from(collaboratorsTable)
+        .delete()
+        .in(
+          'matricula',
+          existingRows.map((item) => item.matricula),
+        )
+
+      if (deleteError) {
+        throw deleteError
+      }
+    }
+
+    const timestamp = new Date().toISOString()
+    const { error: insertError } = await supabase.from(collaboratorsTable).insert(
+      normalizedItems.map((item) => ({
+        matricula: item.matricula,
+        nome: item.nome,
+        created_at: timestamp,
+        updated_at: timestamp,
+      })),
+    )
+
+    if (insertError) {
+      throw insertError
+    }
+
+    return normalizedItems
+  }
+
+  const timestamp = new Date().toISOString()
+  writeFileDatabase({
+    updatedAt: timestamp,
+    items: normalizedItems.map((item) => ({
+      matricula: item.matricula,
+      nome: item.nome,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    })),
+  })
+
+  return normalizedItems
+}
+
 async function updateCollaboratorRecord(originalMatricula, { matricula, nome }) {
   if (supabase) {
     const { data: existing, error: existingError } = await supabase
@@ -541,6 +620,10 @@ function mapErrorStatus(error) {
     return 404
   }
 
+  if (message === 'A lista de colaboradores ativos veio vazia.') {
+    return 400
+  }
+
   return 500
 }
 
@@ -628,6 +711,36 @@ app.post('/api/collaborators', async (request, response, next) => {
     await emitCollaboratorsChanged()
 
     response.status(201).json({ item })
+  } catch (error) {
+    const status = mapErrorStatus(error)
+
+    if (status !== 500) {
+      response.status(status).json({
+        error: error instanceof Error ? error.message : 'Erro interno no servidor.',
+      })
+      return
+    }
+
+    next(error)
+  }
+})
+
+app.post('/api/collaborators/import', async (request, response, next) => {
+  try {
+    const items = Array.isArray(request.body?.items) ? request.body.items : null
+
+    if (!items) {
+      response.status(400).json({ error: 'Envie a lista em items.' })
+      return
+    }
+
+    const imported = await replaceCollaboratorsRecords(items)
+    await emitCollaboratorsChanged()
+
+    response.status(200).json({
+      total: imported.length,
+      message: 'Lista de colaboradores ativos importada.',
+    })
   } catch (error) {
     const status = mapErrorStatus(error)
 
