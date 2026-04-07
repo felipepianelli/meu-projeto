@@ -14,8 +14,10 @@ import {
   fetchAllMissionReportRows,
   fetchCollaboratorMissionMatrix,
   fetchCollaboratorsDb,
+  fetchMissionCertificates,
   fetchMissionAudienceMembers,
   findUsersByMatriculas,
+  importCollaborators,
   removeTeamsFromMissionAudience,
   removeUsersFromMissionAudience,
   subscribeToCollaboratorUpdates,
@@ -26,6 +28,7 @@ import type {
   AccessUser,
   CollaboratorRecord,
   CollaboratorMissionMatrix,
+  MissionCertificateRecord,
   MissionAudienceSummary,
   MissionStatusMetric,
   NavItem,
@@ -180,6 +183,23 @@ function App() {
         error instanceof Error ? error.message : 'Falha ao excluir colaborador.',
       )
       window.setTimeout(() => setCollaboratorFeedback(null), 2600)
+    }
+  }
+
+  async function handleImportCollaborators(records: CollaboratorRecord[]) {
+    try {
+      const total = await importCollaborators(records)
+      setEditingCollaboratorMatricula(null)
+      await refreshCollaboratorSources({ refreshDashboard: true })
+      setCollaboratorFeedback(
+        `Lista semanal importada com sucesso. ${total} colaboradores ativos carregados.`,
+      )
+      window.setTimeout(() => setCollaboratorFeedback(null), 3200)
+    } catch (error) {
+      setCollaboratorFeedback(
+        error instanceof Error ? error.message : 'Falha ao importar a lista semanal de ativos.',
+      )
+      window.setTimeout(() => setCollaboratorFeedback(null), 3200)
     }
   }
 
@@ -581,8 +601,7 @@ function App() {
               </div>
 
               <p className="mission-empty">
-                Abra o relatorio da universidade ja filtrado pela missao para consultar os
-                certificados daquela carga.
+                Tente carregar os certificados da missao diretamente dentro do sistema.
               </p>
 
               <div className="entity-item">
@@ -681,6 +700,7 @@ function App() {
                 onCreateCollaborator={handleCreateCollaborator}
                 onUpdateCollaborator={handleUpdateCollaborator}
                 onDeleteCollaborator={handleDeleteCollaborator}
+                onImportCollaborators={handleImportCollaborators}
               />
             </article>
           </section>
@@ -966,6 +986,29 @@ function CertificateMissionItem({
 }: {
   mission: (typeof missionAudienceCatalog)[number]
 }) {
+  const [isLoading, setIsLoading] = useState(false)
+  const [feedback, setFeedback] = useState<string | null>(null)
+  const [certificates, setCertificates] = useState<MissionCertificateRecord[]>([])
+
+  async function handleLoadCertificates() {
+    setIsLoading(true)
+    setFeedback(null)
+
+    try {
+      const loaded = await fetchMissionCertificates(mission.id)
+      setCertificates(loaded)
+      setFeedback(`${loaded.length} certificado(s) carregado(s) para ${mission.name}.`)
+    } catch (error) {
+      setFeedback(
+        error instanceof Error
+          ? error.message
+          : 'Falha ao carregar os certificados desta missao.',
+      )
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
   return (
     <div className="mission-team-card">
       <div className="mission-team-head">
@@ -978,13 +1021,39 @@ function CertificateMissionItem({
             <button
               className="secondary-button"
               type="button"
-              onClick={() => openMissionCertificatesReport(mission.id, mission.name)}
+              onClick={() => void handleLoadCertificates()}
             >
-              Abrir certificados
+              {isLoading ? 'Carregando...' : 'Abrir certificados'}
             </button>
           </div>
         </div>
       </div>
+
+      {feedback ? <p className="upload-feedback">{feedback}</p> : null}
+
+      {certificates.length ? (
+        <div className="entity-list">
+          {certificates.map((certificate) => (
+            <div key={certificate.certificateId} className="entity-item">
+              <div className="entity-main">
+                <strong>{certificate.name}</strong>
+                <p>{certificate.matricula}</p>
+              </div>
+              <div className="entity-meta">
+                <span>{certificate.missionName}</span>
+                <span>{certificate.issuedAtLabel ?? 'Data nao informada'}</span>
+                <button
+                  className="secondary-button"
+                  type="button"
+                  onClick={() => openCertificatePreview(certificate.certificateId)}
+                >
+                  Ver certificado
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : null}
     </div>
   )
 }
@@ -1359,6 +1428,7 @@ function CollaboratorMissionTable({
   onCreateCollaborator,
   onUpdateCollaborator,
   onDeleteCollaborator,
+  onImportCollaborators,
 }: {
   data: CollaboratorMissionMatrix | null
   collaborators: CollaboratorRecord[]
@@ -1372,11 +1442,13 @@ function CollaboratorMissionTable({
   onCreateCollaborator: (record: CollaboratorRecord) => void
   onUpdateCollaborator: (originalMatricula: string, record: CollaboratorRecord) => void
   onDeleteCollaborator: (matricula: string) => void
+  onImportCollaborators: (records: CollaboratorRecord[]) => Promise<void>
 }) {
   const [page, setPage] = useState(1)
   const [newMatricula, setNewMatricula] = useState('')
   const [newNome, setNewNome] = useState('')
   const [search, setSearch] = useState('')
+  const importInputRef = useRef<HTMLInputElement | null>(null)
 
   if (isLoading) {
     return <p className="mission-empty">Carregando colaboradores...</p>
@@ -1452,6 +1524,33 @@ function CollaboratorMissionTable({
             >
               Baixar banco de colaboradores
             </button>
+            <button
+              className="secondary-button"
+              type="button"
+              onClick={() => importInputRef.current?.click()}
+            >
+              Importar lista semanal de ativos
+            </button>
+            <input
+              ref={importInputRef}
+              type="file"
+              accept=".xls,.xlsx"
+              hidden
+              onChange={async (event) => {
+                const file = event.target.files?.[0]
+
+                if (!file) {
+                  return
+                }
+
+                try {
+                  const importedRows = await readCollaboratorsFromWorkbook(file)
+                  await onImportCollaborators(importedRows)
+                } finally {
+                  event.currentTarget.value = ''
+                }
+              }}
+            />
           </div>
         </div>
       ) : null}
@@ -1996,18 +2095,6 @@ function downloadMissionAudienceMembers(
   URL.revokeObjectURL(url)
 }
 
-function openMissionCertificatesReport(missionId: string, missionName: string) {
-  const url = new URL('https://universidadesimpar.skore.io/reports/1206')
-  url.searchParams.set('Tipo', 'mission')
-  url.searchParams.set('ID da Missao', missionId)
-  url.searchParams.set('Nome da Missao', missionName)
-  url.searchParams.set('Conteudo Deletado?', 'No')
-  url.searchParams.set('Usuario Ativo?', 'Yes')
-  url.searchParams.set('Usuario Deletado?', 'No')
-
-  window.open(url.toString(), '_blank', 'noopener,noreferrer')
-}
-
 function openCertificatePreview(certificateId: string) {
   const normalized = certificateId.trim()
 
@@ -2251,6 +2338,48 @@ async function readMatriculasFromWorkbook(file: File) {
     .slice(1)
     .map((row) => String(row[0] ?? '').trim())
     .filter(Boolean)
+}
+
+async function readCollaboratorsFromWorkbook(file: File) {
+  const buffer = await file.arrayBuffer()
+  const workbook = XLSX.read(buffer, { type: 'array' })
+  const firstSheetName = workbook.SheetNames[0]
+  const worksheet = workbook.Sheets[firstSheetName]
+  const rows = XLSX.utils.sheet_to_json<(string | number | null)[]>(worksheet, {
+    header: 1,
+    raw: false,
+  })
+
+  const imported = rows
+    .slice(1)
+    .map((row) => {
+      const matricula = String(row[0] ?? '').trim()
+      const nome = String(row[1] ?? '').trim()
+      const status = String(row[17] ?? '')
+        .trim()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase()
+
+      return {
+        matricula,
+        nome,
+        status,
+      }
+    })
+    .filter((row) => row.matricula && row.nome && row.status === 'ativo')
+    .map((row) => ({
+      matricula: row.matricula,
+      nome: row.nome,
+    }))
+
+  if (!imported.length) {
+    throw new Error(
+      'Nenhum colaborador ativo foi encontrado no arquivo. Use A = Numero Pessoal, B = Nome e R = Status com valor Ativo.',
+    )
+  }
+
+  return imported
 }
 
 function NavIcon({ icon }: { icon: string }) {
