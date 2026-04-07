@@ -7,6 +7,7 @@ import type {
   CollaboratorMissionMatrix,
   ConnectionStatus,
   DashboardData,
+  MissionCertificateRecord,
   MissionAudienceMember,
   MissionReportRow,
   MissionAudienceSummary,
@@ -19,6 +20,7 @@ const LOCAL_MISSION_AUDIENCE_KEY = 'skore_manager_mission_audience_overrides'
 const LOCAL_COLLABORATORS_KEY = 'skore_manager_collaborators_db'
 const LOCAL_COLLABORATORS_SYNC_KEY = 'skore_manager_collaborators_synced_at'
 const JSL_GRU_FILTER = 'jsl/gru'
+const LOOKER_QUERY_URL = 'https://skoreio.sa.looker.com/api/internal/querymanager/queries'
 const collaboratorsApiUrl =
   import.meta.env.VITE_COLLABORATORS_API_URL?.trim() ||
   'https://meu-backend-2p74.onrender.com'
@@ -418,6 +420,7 @@ let collaboratorMatrixCache: Promise<CollaboratorMissionMatrix> | null = null
 let collaboratorsSocket: Socket | null = null
 const auditedTeamMembersCache = new Map<number, Promise<TeamMember[]>>()
 let allActiveUsersCache: Promise<SkoreUserApiItem[]> | null = null
+const missionCertificatesCache = new Map<string, Promise<MissionCertificateRecord[]>>()
 
 type MissionAudienceOverride = {
   audience: Array<{
@@ -565,6 +568,7 @@ export function clearUsersCache() {
   collaboratorMatrixCache = null
   allActiveUsersCache = null
   auditedTeamMembersCache.clear()
+  missionCertificatesCache.clear()
 }
 
 export async function downloadTeamAuditCsvFromBackend(teamId: number, teamName: string) {
@@ -596,6 +600,146 @@ export async function downloadTeamAuditCsvFromBackend(teamId: number, teamName: 
   window.URL.revokeObjectURL(objectUrl)
 
   return Number(response.headers.get('X-Team-Audit-Count') ?? 0)
+}
+
+type LookerCertificateCell = {
+  value?: string | number | null
+  links?: Array<{
+    label?: string
+    url?: string
+    type?: string
+    icon_url?: string
+  }>
+}
+
+type LookerMissionCertificatesResponse = {
+  status?: string
+  data?: Array<Record<string, LookerCertificateCell>>
+}
+
+export async function fetchMissionCertificates(
+  missionId: string,
+  signal?: AbortSignal,
+  options?: { refresh?: boolean },
+): Promise<MissionCertificateRecord[]> {
+  if (options?.refresh) {
+    missionCertificatesCache.delete(missionId)
+  }
+
+  const cached = missionCertificatesCache.get(missionId)
+
+  if (cached) {
+    return cached
+  }
+
+  const request = (async () => {
+    const response = await fetch(LOOKER_QUERY_URL, {
+      method: 'POST',
+      credentials: 'include',
+      signal,
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        plain_queries: [],
+        saved_queries: [
+          {
+            element_id: '10069',
+            filters: [
+              {
+                'users.id': '',
+                'certificates.type': 'mission',
+                'mission_definitions.mission_id': missionId,
+                'contents.id': '',
+                'contents.title': '',
+                'mission_definitions.name': '',
+                'contents.isDeleted': 'No',
+                'users.email': '',
+                'users.username': '',
+                'users.name': '',
+                'metadata.cpf': '',
+                'metadata.cargo': '',
+                'metadata.data_admissao': '',
+                'metadata.departamento': '',
+                'metadata.filial': '',
+                'leaders.leader_name': '',
+                'departments.name': '',
+                'users.active': 'Yes',
+                'users.isDeleted': 'No',
+              },
+            ],
+            generate_links: true,
+            path_prefix: '/explore',
+            server_table_calcs: false,
+            source: 'dashboard',
+            sorts: ['users.id'],
+            result_maker_id: '69247',
+          },
+        ],
+        context: {
+          id: '1476',
+          type: 'dashboard',
+          session_id: `skore-manager-${Date.now()}`,
+        },
+        options: {
+          force_run: true,
+          streaming: true,
+          eager_poll: false,
+          enable_phases: false,
+        },
+      }),
+    })
+
+    if (!response.ok) {
+      throw new Error(`Falha ao consultar certificados (${response.status})`)
+    }
+
+    const payload = (await response.json()) as LookerMissionCertificatesResponse
+
+    if (payload.status && payload.status !== 'complete') {
+      throw new Error('A consulta de certificados nao foi concluida.')
+    }
+
+    const rows = payload.data ?? []
+
+    return rows
+      .map((row) => {
+        const certificateId = String(row['certificates.id']?.value ?? '').trim()
+
+        if (!certificateId) {
+          return null
+        }
+
+        return {
+          certificateId,
+          matricula: String(row['users.username']?.value ?? '-').trim() || '-',
+          name: String(row['users.name']?.value ?? '-').trim() || '-',
+          email: row['users.email']?.value ? String(row['users.email']?.value) : null,
+          missionId: String(row['mission_definitions.mission_id']?.value ?? missionId),
+          missionName:
+            String(row['mission_definitions.name']?.value ?? row['nome_do_conteudo']?.value ?? '-').trim() ||
+            '-',
+          certificateType: String(row['certificates.type']?.value ?? 'mission'),
+          certificateTemplateId: row['certificates.certificate_template_id']?.value
+            ? String(row['certificates.certificate_template_id']?.value)
+            : null,
+          issuedAtLabel: row['certificates.created_date']?.value
+            ? formatDateLabel(String(row['certificates.created_date']?.value))
+            : null,
+        } satisfies MissionCertificateRecord
+      })
+      .filter((item): item is MissionCertificateRecord => Boolean(item))
+  })()
+
+  missionCertificatesCache.set(missionId, request)
+
+  try {
+    return await request
+  } catch (error) {
+    missionCertificatesCache.delete(missionId)
+    throw error
+  }
 }
 
 async function fetchAllActiveUsers(signal?: AbortSignal): Promise<SkoreUserApiItem[]> {
@@ -1193,6 +1337,49 @@ export async function deleteCollaborator(matricula: string) {
   const next = getCollaboratorsDb().filter((item) => item.matricula !== matricula)
   persistCollaboratorsDb(next)
   clearUsersCache()
+}
+
+export async function importCollaborators(records: CollaboratorRecord[]) {
+  const normalized = Array.from(
+    new Map(
+      records
+        .map((record) => ({
+          matricula: record.matricula.trim(),
+          nome: record.nome.trim(),
+        }))
+        .filter((record) => record.matricula && record.nome)
+        .map((record) => [record.matricula, record]),
+    ).values(),
+  )
+
+  if (!normalized.length) {
+    throw new Error('Nenhum colaborador valido foi encontrado no arquivo.')
+  }
+
+  if (hasCollaboratorsBackend()) {
+    const response = await fetch(`${collaboratorsApiUrl}/api/collaborators/import`, {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        items: normalized,
+      }),
+    })
+
+    if (!response.ok) {
+      const payload = (await response.json().catch(() => null)) as { error?: string } | null
+      throw new Error(payload?.error ?? `Falha ao importar colaboradores (${response.status})`)
+    }
+
+    await syncCollaboratorsFromServer()
+    return normalized.length
+  }
+
+  persistCollaboratorsDb(normalized)
+  clearUsersCache()
+  return normalized.length
 }
 
 export function subscribeToCollaboratorUpdates(
