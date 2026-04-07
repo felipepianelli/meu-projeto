@@ -13,6 +13,7 @@ import type {
   MissionAudienceSummary,
   SyncEvent,
   TeamMember,
+  UserSummary,
 } from '../types'
 
 const LOCAL_STORAGE_TOKEN_KEY = 'skore_manager_token'
@@ -1410,6 +1411,10 @@ export function subscribeToCollaboratorUpdates(
 
 async function fetchRecentMissionUsers(signal?: AbortSignal) {
   const userDetailsCache = new Map<string, Promise<SkoreUserDetailApiItem | null>>()
+  const latestEventByUserId = new Map<
+    string,
+    { userId: string; completedAt: number; missionName: string }
+  >()
   const completedEvents = (
     await Promise.all(
       missionAudienceCatalog.map(async (mission) => {
@@ -1418,6 +1423,7 @@ async function fetchRecentMissionUsers(signal?: AbortSignal) {
         return items.map((item) => ({
           userId: item.user_id,
           completedAt: item.completed_at ?? 0,
+          missionName: mission.name,
         }))
       }),
     )
@@ -1425,28 +1431,46 @@ async function fetchRecentMissionUsers(signal?: AbortSignal) {
     .flat()
     .sort((a, b) => b.completedAt - a.completedAt)
 
-  const uniqueUserIds = Array.from(
-    new Set(completedEvents.map((item) => item.userId)),
-  ).slice(0, 10)
+  completedEvents.forEach((item) => {
+    if (!latestEventByUserId.has(item.userId)) {
+      latestEventByUserId.set(item.userId, item)
+    }
+  })
+
+  const latestEvents = Array.from(latestEventByUserId.values()).slice(0, 10)
 
   const users = await Promise.all(
-    uniqueUserIds.map((userId) => fetchUserDetailCached(userId, userDetailsCache, signal)),
+    latestEvents.map((item) => fetchUserDetailCached(item.userId, userDetailsCache, signal)),
   )
 
-  return users
-    .filter((user): user is SkoreUserDetailApiItem => Boolean(user))
-    .map((user) => ({
-      id: user.id,
-      name:
-        getCollaboratorContext().collaboratorNamesByMatricula.get(user.username ?? '') ||
-        user.name,
-      email: user.email ?? 'Sem email',
-      username: user.username,
-      role: user.role ?? 'student',
-      active: true,
-      teamNames: (user.teams ?? []).map((team) => team.name).slice(0, 3),
-      createdAtLabel: user.created_at ? formatDateLabel(user.created_at) : 'Missao recente',
-    }))
+  const recentUsers: UserSummary[] = []
+
+  users.forEach((user, index) => {
+      const event = latestEvents[index]
+
+      if (!user || !event) {
+        return
+      }
+
+      recentUsers.push({
+        id: user.id,
+        name:
+          getCollaboratorContext().collaboratorNamesByMatricula.get(user.username ?? '') ||
+          user.name,
+        email: user.email ?? 'Sem email',
+        username: user.username,
+        role: user.role ?? 'student',
+        active: true,
+        teamNames: (user.teams ?? []).map((team) => team.name).slice(0, 3),
+        createdAtLabel:
+          event.completedAt > 0
+            ? `Concluiu em ${formatTimestampLabel(event.completedAt)}`
+            : 'Missao recente',
+        recentMissionName: event.missionName,
+    })
+  })
+
+  return recentUsers
 }
 
 async function fetchMissionOverviewMetrics(signal?: AbortSignal) {
