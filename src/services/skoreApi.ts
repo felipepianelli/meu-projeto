@@ -8,6 +8,7 @@ import type {
   ConnectionStatus,
   DashboardData,
   MissionCertificateRecord,
+  MissionCompletedCollaboratorRecord,
   MissionAudienceMember,
   MissionReportRow,
   MissionAudienceSummary,
@@ -741,6 +742,53 @@ export async function fetchMissionCertificates(
     missionCertificatesCache.delete(missionId)
     throw error
   }
+}
+
+export async function fetchCompletedCollaboratorsForMission(
+  missionId: string,
+  signal?: AbortSignal,
+): Promise<MissionCompletedCollaboratorRecord[]> {
+  const userDetailsCache = new Map<string, Promise<SkoreUserDetailApiItem | null>>()
+  const completedEnrollments = await fetchMissionEnrollmentsByStatus(missionId, 'COMPLETED', signal)
+  const latestByUserId = new Map<string, MissionEnrollmentApiItem>()
+
+  completedEnrollments
+    .slice()
+    .sort((a, b) => (b.completed_at ?? 0) - (a.completed_at ?? 0))
+    .forEach((item) => {
+      if (!latestByUserId.has(item.user_id)) {
+        latestByUserId.set(item.user_id, item)
+      }
+    })
+
+  const latestEnrollments = Array.from(latestByUserId.values())
+  const users = await Promise.all(
+    latestEnrollments.map((item) => fetchUserDetailCached(item.user_id, userDetailsCache, signal)),
+  )
+  const collaboratorNamesByMatricula = getCollaboratorContext().collaboratorNamesByMatricula
+
+  return users
+    .map((user, index) => {
+      const enrollment = latestEnrollments[index]
+
+      if (!user || !enrollment) {
+        return null
+      }
+
+      const matricula = String(user.username ?? '').trim()
+
+      return {
+        userId: enrollment.user_id,
+        matricula: matricula || '-',
+        name: collaboratorNamesByMatricula.get(matricula) || user.name || '-',
+        completedAtLabel:
+          enrollment.completed_at && enrollment.completed_at > 0
+            ? formatTimestampLabel(enrollment.completed_at)
+            : null,
+      } satisfies MissionCompletedCollaboratorRecord
+    })
+    .filter((item): item is MissionCompletedCollaboratorRecord => Boolean(item))
+    .sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'))
 }
 
 async function fetchAllActiveUsers(signal?: AbortSignal): Promise<SkoreUserApiItem[]> {
