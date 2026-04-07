@@ -144,6 +144,7 @@ export type MissionReportRow = {
 
 export type MissionCertificateRecord = {
   certificateId: string
+  userId: string
   matricula: string
   name: string
   email: string | null

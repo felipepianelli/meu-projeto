@@ -52,6 +52,14 @@ function openCertificatePreview(certificateId: string) {
   window.open(url.toString(), '_blank', 'noopener,noreferrer')
 }
 
+function normalizeComparisonText(value: string) {
+  return value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim()
+}
+
 const navItems: NavItem[] = [
   { label: 'Overview', icon: 'grid' },
   { label: 'Missoes', icon: 'book' },
@@ -1006,16 +1014,36 @@ function CertificateMissionItem({
 
     try {
       const certificates = await fetchMissionCertificates(mission.id, undefined, { refresh: true })
-      const certificateIdByMatricula = new Map(
-        certificates
-          .map((certificate) => [certificate.matricula, certificate.certificateId] as const)
-          .filter((item) => Boolean(item[0]) && Boolean(item[1])),
-      )
+      const normalizedMissionName = normalizeComparisonText(mission.name)
       let matched = 0
 
       setCompletedUsers((current) =>
         current.map((user) => {
-          const certificateId = certificateIdByMatricula.get(user.matricula) ?? null
+          const matchedCertificate =
+            certificates.find(
+              (certificate) =>
+                certificate.certificateType === 'mission' &&
+                certificate.userId === user.userId &&
+                normalizeComparisonText(certificate.missionName) === normalizedMissionName,
+            ) ??
+            certificates.find(
+              (certificate) =>
+                certificate.certificateType === 'mission' &&
+                certificate.matricula === user.matricula &&
+                normalizeComparisonText(certificate.missionName) === normalizedMissionName,
+            ) ??
+            certificates.find(
+              (certificate) =>
+                certificate.certificateType === 'mission' &&
+                certificate.userId === user.userId,
+            ) ??
+            certificates.find(
+              (certificate) =>
+                certificate.certificateType === 'mission' &&
+                certificate.matricula === user.matricula,
+            ) ??
+            null
+          const certificateId = matchedCertificate?.certificateId ?? null
 
           if (certificateId) {
             matched += 1
