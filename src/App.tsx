@@ -15,6 +15,7 @@ import {
   fetchCollaboratorMissionMatrix,
   fetchCollaboratorsDb,
   fetchCompletedCollaboratorsForMission,
+  fetchMissionCertificates,
   fetchMissionAudienceMembers,
   findUsersByMatriculas,
   importCollaborators,
@@ -36,6 +37,20 @@ import type {
   TeamSummary,
   UserSummary,
 } from './types'
+
+function openCertificatePreview(certificateId: string) {
+  const normalized = certificateId.trim()
+
+  if (!normalized) {
+    return
+  }
+
+  const url = new URL('https://universidadesimpar.skore.io/plugins/certificates')
+  url.searchParams.set('page', 'preview')
+  url.searchParams.set('id', normalized)
+
+  window.open(url.toString(), '_blank', 'noopener,noreferrer')
+}
 
 const navItems: NavItem[] = [
   { label: 'Overview', icon: 'grid' },
@@ -962,6 +977,7 @@ function CertificateMissionItem({
   mission: (typeof missionAudienceCatalog)[number]
 }) {
   const [isLoading, setIsLoading] = useState(false)
+  const [isLocatingCertificates, setIsLocatingCertificates] = useState(false)
   const [feedback, setFeedback] = useState<string | null>(null)
   const [completedUsers, setCompletedUsers] = useState<MissionCompletedCollaboratorRecord[]>([])
 
@@ -984,6 +1000,46 @@ function CertificateMissionItem({
     }
   }
 
+  async function handleLocateCertificates() {
+    setIsLocatingCertificates(true)
+    setFeedback(null)
+
+    try {
+      const certificates = await fetchMissionCertificates(mission.id, undefined, { refresh: true })
+      const certificateIdByMatricula = new Map(
+        certificates
+          .map((certificate) => [certificate.matricula, certificate.certificateId] as const)
+          .filter((item) => Boolean(item[0]) && Boolean(item[1])),
+      )
+      let matched = 0
+
+      setCompletedUsers((current) =>
+        current.map((user) => {
+          const certificateId = certificateIdByMatricula.get(user.matricula) ?? null
+
+          if (certificateId) {
+            matched += 1
+          }
+
+          return {
+            ...user,
+            certificateId,
+          }
+        }),
+      )
+
+      setFeedback(`${matched} certificado(s) localizado(s) para ${mission.name}.`)
+    } catch (error) {
+      setFeedback(
+        error instanceof Error
+          ? error.message
+          : 'Falha ao localizar os IDs de certificado desta missao.',
+      )
+    } finally {
+      setIsLocatingCertificates(false)
+    }
+  }
+
   return (
     <div className="mission-team-card">
       <div className="mission-team-head">
@@ -999,6 +1055,14 @@ function CertificateMissionItem({
               onClick={() => void handleLoadCertificates()}
             >
               {isLoading ? 'Carregando...' : 'Abrir certificados'}
+            </button>
+            <button
+              className="secondary-button"
+              type="button"
+              onClick={() => void handleLocateCertificates()}
+              disabled={!completedUsers.length || isLocatingCertificates}
+            >
+              {isLocatingCertificates ? 'Localizando...' : 'Localizar certificados'}
             </button>
           </div>
         </div>
@@ -1016,6 +1080,15 @@ function CertificateMissionItem({
               </div>
               <div className="entity-meta">
                 <span>{user.completedAtLabel ?? 'Data nao informada'}</span>
+                {user.certificateId ? <span>{user.certificateId}</span> : <span>ID nao localizado</span>}
+                <button
+                  className="secondary-button"
+                  type="button"
+                  disabled={!user.certificateId}
+                  onClick={() => (user.certificateId ? openCertificatePreview(user.certificateId) : undefined)}
+                >
+                  Abrir certificado
+                </button>
               </div>
             </div>
           ))}

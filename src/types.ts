@@ -159,4 +159,5 @@ export type MissionCompletedCollaboratorRecord = {
   matricula: string
   name: string
   completedAtLabel: string | null
+  certificateId?: string | null
 }
