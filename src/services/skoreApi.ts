@@ -715,6 +715,7 @@ export async function fetchMissionCertificates(
 
         return {
           certificateId,
+          userId: String(row['users.id']?.value ?? '').trim(),
           matricula: String(row['users.username']?.value ?? '-').trim() || '-',
           name: String(row['users.name']?.value ?? '-').trim() || '-',
           email: row['users.email']?.value ? String(row['users.email']?.value) : null,
