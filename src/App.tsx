@@ -14,8 +14,6 @@ import {
   fetchAllMissionReportRows,
   fetchCollaboratorMissionMatrix,
   fetchCollaboratorsDb,
-  fetchCompletedCollaboratorsForMission,
-  fetchMissionCertificates,
   fetchMissionAudienceMembers,
   findUsersByMatriculas,
   importCollaborators,
@@ -29,7 +27,6 @@ import type {
   AccessUser,
   CollaboratorRecord,
   CollaboratorMissionMatrix,
-  MissionCompletedCollaboratorRecord,
   MissionAudienceSummary,
   MissionStatusMetric,
   NavItem,
@@ -38,32 +35,9 @@ import type {
   UserSummary,
 } from './types'
 
-function openCertificatePreview(certificateId: string) {
-  const normalized = certificateId.trim()
-
-  if (!normalized) {
-    return
-  }
-
-  const url = new URL('https://universidadesimpar.skore.io/plugins/certificates')
-  url.searchParams.set('page', 'preview')
-  url.searchParams.set('id', normalized)
-
-  window.open(url.toString(), '_blank', 'noopener,noreferrer')
-}
-
-function normalizeComparisonText(value: string) {
-  return value
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toLowerCase()
-    .trim()
-}
-
 const navItems: NavItem[] = [
   { label: 'Overview', icon: 'grid' },
   { label: 'Missoes', icon: 'book' },
-  { label: 'Certificados', icon: 'report' },
   { label: 'Times', icon: 'users' },
   { label: 'Colaboradores', icon: 'users' },
   { label: 'Matriz', icon: 'table' },
@@ -615,26 +589,6 @@ function App() {
           </>
         ) : null}
 
-        {activeTab === 'Certificados' ? (
-          <section className="mission-users-grid">
-            <article className="card sync-card">
-              <div className="card-header">
-                <h3>Certificados por Missao</h3>
-              </div>
-
-              <p className="mission-empty">
-                Clique em uma missao para ver as pessoas com status completed nessa carga.
-              </p>
-
-              <div className="mission-team-list">
-                {missionAudienceCatalog.map((mission) => (
-                  <CertificateMissionItem key={mission.id} mission={mission} />
-                ))}
-              </div>
-            </article>
-          </section>
-        ) : null}
-
         {activeTab === 'Times' ? (
           <section className="mission-users-grid">
             <article className="card sync-card">
@@ -975,153 +929,6 @@ function TeamAuditItem({
       </p>
 
       {feedback ? <p className="upload-feedback">{feedback}</p> : null}
-    </div>
-  )
-}
-
-function CertificateMissionItem({
-  mission,
-}: {
-  mission: (typeof missionAudienceCatalog)[number]
-}) {
-  const [isLoading, setIsLoading] = useState(false)
-  const [isLocatingCertificates, setIsLocatingCertificates] = useState(false)
-  const [feedback, setFeedback] = useState<string | null>(null)
-  const [completedUsers, setCompletedUsers] = useState<MissionCompletedCollaboratorRecord[]>([])
-
-  async function handleLoadCertificates() {
-    setIsLoading(true)
-    setFeedback(null)
-
-    try {
-      const loaded = await fetchCompletedCollaboratorsForMission(mission.id)
-      setCompletedUsers(loaded)
-      setFeedback(`${loaded.length} pessoa(s) com missao concluida em ${mission.name}.`)
-    } catch (error) {
-      setFeedback(
-        error instanceof Error
-          ? error.message
-          : 'Falha ao carregar os concluintes desta missao.',
-      )
-    } finally {
-      setIsLoading(false)
-    }
-  }
-
-  async function handleLocateCertificates() {
-    setIsLocatingCertificates(true)
-    setFeedback(null)
-
-    try {
-      const certificates = await fetchMissionCertificates(mission.id, undefined, { refresh: true })
-      const normalizedMissionName = normalizeComparisonText(mission.name)
-      let matched = 0
-
-      setCompletedUsers((current) =>
-        current.map((user) => {
-          const matchedCertificate =
-            certificates.find(
-              (certificate) =>
-                certificate.certificateType === 'mission' &&
-                certificate.userId === user.userId &&
-                normalizeComparisonText(certificate.missionName) === normalizedMissionName,
-            ) ??
-            certificates.find(
-              (certificate) =>
-                certificate.certificateType === 'mission' &&
-                certificate.matricula === user.matricula &&
-                normalizeComparisonText(certificate.missionName) === normalizedMissionName,
-            ) ??
-            certificates.find(
-              (certificate) =>
-                certificate.certificateType === 'mission' &&
-                certificate.userId === user.userId,
-            ) ??
-            certificates.find(
-              (certificate) =>
-                certificate.certificateType === 'mission' &&
-                certificate.matricula === user.matricula,
-            ) ??
-            null
-          const certificateId = matchedCertificate?.certificateId ?? null
-
-          if (certificateId) {
-            matched += 1
-          }
-
-          return {
-            ...user,
-            certificateId,
-          }
-        }),
-      )
-
-      setFeedback(`${matched} certificado(s) localizado(s) para ${mission.name}.`)
-    } catch (error) {
-      setFeedback(
-        error instanceof Error
-          ? error.message
-          : 'Falha ao localizar os IDs de certificado desta missao.',
-      )
-    } finally {
-      setIsLocatingCertificates(false)
-    }
-  }
-
-  return (
-    <div className="mission-team-card">
-      <div className="mission-team-head">
-        <strong>{mission.name}</strong>
-        <div className="mission-team-actions">
-          <div className="entity-meta">
-            <span>ID da missao: {mission.id}</span>
-          </div>
-          <div className="team-action-group">
-            <button
-              className="secondary-button"
-              type="button"
-              onClick={() => void handleLoadCertificates()}
-            >
-              {isLoading ? 'Carregando...' : 'Abrir certificados'}
-            </button>
-            <button
-              className="secondary-button"
-              type="button"
-              onClick={() => void handleLocateCertificates()}
-              disabled={!completedUsers.length || isLocatingCertificates}
-            >
-              {isLocatingCertificates ? 'Localizando...' : 'Localizar certificados'}
-            </button>
-          </div>
-        </div>
-      </div>
-
-      {feedback ? <p className="upload-feedback">{feedback}</p> : null}
-
-      {completedUsers.length ? (
-        <div className="entity-list">
-          {completedUsers.map((user) => (
-            <div key={`${mission.id}-${user.userId}`} className="entity-item">
-              <div className="entity-main">
-                <strong>{user.name}</strong>
-                <p>{user.matricula}</p>
-              </div>
-              <div className="entity-meta">
-                <span>{user.completedAtLabel ?? 'Data nao informada'}</span>
-                {user.certificateId ? <span>{user.certificateId}</span> : <span>ID nao localizado</span>}
-                <button
-                  className="secondary-button"
-                  type="button"
-                  disabled={!user.certificateId}
-                  onClick={() => (user.certificateId ? openCertificatePreview(user.certificateId) : undefined)}
-                >
-                  Abrir certificado
-                </button>
-              </div>
-            </div>
-          ))}
-        </div>
-      ) : null}
     </div>
   )
 }
