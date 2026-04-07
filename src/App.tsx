@@ -1466,8 +1466,8 @@ function CollaboratorMissionTable({
     .map((collaborator) => ({
       ...collaborator,
       assigned: Boolean(
-        data.collaborators.find((item) => item.matricula === collaborator.matricula)
-          ?.missionNames.length,
+        data.collaborators.find((item) => item.matricula === collaborator.matricula)?.teamNames
+          .length,
       ),
     }))
     .filter((row) => {
