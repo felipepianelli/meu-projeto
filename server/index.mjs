@@ -215,6 +215,22 @@ async function getCollaboratorsPayload() {
   }
 }
 
+async function getCollaboratorsPayloadForAudit() {
+  try {
+    return await getCollaboratorsPayload()
+  } catch (error) {
+    console.warn('Falha ao ler colaboradores do banco para auditoria. Usando seed local.', error)
+
+    const seedRows = readSeedRows()
+
+    return {
+      items: seedRows,
+      total: seedRows.length,
+      updatedAt: new Date().toISOString(),
+    }
+  }
+}
+
 async function emitCollaboratorsChanged() {
   const payload = await getCollaboratorsPayload()
 
@@ -291,7 +307,7 @@ async function fetchCollaboratorUsersForAudit(options = {}) {
   }
 
   const request = (async () => {
-    const collaboratorsPayload = await getCollaboratorsPayload()
+    const collaboratorsPayload = await getCollaboratorsPayloadForAudit()
     const collaboratorNamesByMatricula = new Map(
       collaboratorsPayload.items.map((item) => [item.matricula, item.nome]),
     )
