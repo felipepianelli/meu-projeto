@@ -822,12 +822,14 @@ function UserItem({ user, compactRecent = false }: { user: UserSummary; compactR
       </div>
       <div className="entity-meta">
         <span>{user.createdAtLabel}</span>
-        {!compactRecent ? (
+        {compactRecent ? (
+          <span>{user.recentMissionName ?? 'Missao recente'}</span>
+        ) : (
           <>
             <span>{user.role}</span>
             <span>{user.teamNames.length ? user.teamNames.join(', ') : 'Sem time'}</span>
           </>
-        ) : null}
+        )}
       </div>
     </div>
   )

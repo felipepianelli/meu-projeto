@@ -77,6 +77,7 @@ export type UserSummary = {
   active: boolean
   teamNames: string[]
   createdAtLabel: string
+  recentMissionName?: string
 }
 
 export type UserEnrollmentSummary = {
