@@ -51,7 +51,7 @@ const COLLABORATOR_PAGE_SIZE = 20
 const ACCESS_SESSION_KEY = 'skore_manager_access_user'
 const ACCESS_USERS_KEY = 'skore_manager_access_users'
 const REPORTS_AUTOMATION_ENABLED_KEY = 'skore_manager_reports_automation_enabled'
-const REPORTS_AUTOMATION_TIME_KEY = 'skore_manager_reports_automation_time'
+const REPORTS_AUTOMATION_TIMES_KEY = 'skore_manager_reports_automation_times'
 const REPORTS_AUTOMATION_LAST_RUN_KEY = 'skore_manager_reports_automation_last_run'
 
 function App() {
@@ -78,8 +78,8 @@ function App() {
   const [reportsAutomationEnabled, setReportsAutomationEnabled] = useState(() =>
     getStoredBoolean(REPORTS_AUTOMATION_ENABLED_KEY, false),
   )
-  const [reportsAutomationTime, setReportsAutomationTime] = useState(() =>
-    getStoredString(REPORTS_AUTOMATION_TIME_KEY, '08:00'),
+  const [reportsAutomationTimes, setReportsAutomationTimes] = useState(() =>
+    getStoredTimes(REPORTS_AUTOMATION_TIMES_KEY, ['08:00', '12:00', '17:00']),
   )
   const [reportsAutomationFeedback, setReportsAutomationFeedback] = useState<string | null>(null)
   const [editingCollaboratorMatricula, setEditingCollaboratorMatricula] = useState<string | null>(
@@ -209,13 +209,18 @@ function App() {
     }
   }
 
-  async function runReportsExport(mode: 'manual' | 'automatic') {
+  async function runReportsExport(mode: 'manual' | 'automatic', slotKey?: string) {
     try {
       await handleDownloadAllReports(setIsExportingReports)
 
-      if (mode === 'automatic') {
+      if (mode === 'automatic' && slotKey) {
         const todayStamp = getTodayStamp()
-        window.localStorage.setItem(REPORTS_AUTOMATION_LAST_RUN_KEY, todayStamp)
+        const nextRunMap = readStoredRunMap(REPORTS_AUTOMATION_LAST_RUN_KEY)
+        nextRunMap[slotKey] = todayStamp
+        window.localStorage.setItem(
+          REPORTS_AUTOMATION_LAST_RUN_KEY,
+          JSON.stringify(nextRunMap),
+        )
         setReportsAutomationFeedback(
           `Relatorio automatico gerado em ${formatDateTimeNow()}.`,
         )
@@ -360,8 +365,11 @@ function App() {
       return
     }
 
-    window.localStorage.setItem(REPORTS_AUTOMATION_TIME_KEY, reportsAutomationTime)
-  }, [reportsAutomationTime])
+    window.localStorage.setItem(
+      REPORTS_AUTOMATION_TIMES_KEY,
+      JSON.stringify(reportsAutomationTimes),
+    )
+  }, [reportsAutomationTimes])
 
   useEffect(() => {
     void refreshCollaboratorSources({ refreshDashboard: true })
@@ -387,33 +395,37 @@ function App() {
         return
       }
 
-      const scheduledTime = parseTimeValue(reportsAutomationTime)
-
-      if (!scheduledTime) {
-        return
-      }
-
       const now = new Date()
       const todayStamp = getTodayStamp(now)
-      const lastRunStamp =
+      const lastRunMap =
         typeof window !== 'undefined'
-          ? window.localStorage.getItem(REPORTS_AUTOMATION_LAST_RUN_KEY)
-          : null
+          ? readStoredRunMap(REPORTS_AUTOMATION_LAST_RUN_KEY)
+          : {}
 
-      if (lastRunStamp === todayStamp) {
-        return
-      }
+      reportsAutomationTimes.forEach((timeValue, index) => {
+        const scheduledTime = parseTimeValue(timeValue)
 
-      const scheduledAt = new Date(now)
-      scheduledAt.setHours(scheduledTime.hours, scheduledTime.minutes, 0, 0)
+        if (!scheduledTime) {
+          return
+        }
 
-      if (now >= scheduledAt) {
-        void runReportsExport('automatic')
-      }
+        const slotKey = `slot_${index}`
+
+        if (lastRunMap[slotKey] === todayStamp) {
+          return
+        }
+
+        const scheduledAt = new Date(now)
+        scheduledAt.setHours(scheduledTime.hours, scheduledTime.minutes, 0, 0)
+
+        if (now >= scheduledAt) {
+          void runReportsExport('automatic', slotKey)
+        }
+      })
     }, 30000)
 
     return () => window.clearInterval(intervalId)
-  }, [reportsAutomationEnabled, reportsAutomationTime, isExportingReports])
+  }, [reportsAutomationEnabled, reportsAutomationTimes, isExportingReports])
 
   useEffect(() => {
     if (activeTab !== 'Colaboradores' && activeTab !== 'Matriz') {
@@ -794,17 +806,28 @@ function App() {
                     />
                     <span>Gerar automaticamente com o site aberto</span>
                   </label>
-                  <div className="reports-automation-controls">
-                    <input
-                      className="audience-select"
-                      type="time"
-                      value={reportsAutomationTime}
-                      onChange={(event) => setReportsAutomationTime(event.target.value)}
-                    />
-                    <span className="reports-automation-hint">
-                      O site precisa permanecer aberto nesse horario.
-                    </span>
+                  <div className="reports-automation-times">
+                    {reportsAutomationTimes.map((timeValue, index) => (
+                      <div key={`report-time-${index}`} className="reports-automation-controls">
+                        <span className="reports-automation-label">Horario {index + 1}</span>
+                        <input
+                          className="audience-select"
+                          type="time"
+                          value={timeValue}
+                          onChange={(event) =>
+                            setReportsAutomationTimes((current) =>
+                              current.map((item, itemIndex) =>
+                                itemIndex === index ? event.target.value : item,
+                              ),
+                            )
+                          }
+                        />
+                      </div>
+                    ))}
                   </div>
+                  <span className="reports-automation-hint">
+                    O site precisa permanecer aberto nesses horarios.
+                  </span>
                   {reportsAutomationFeedback ? (
                     <p className="upload-feedback">{reportsAutomationFeedback}</p>
                   ) : null}
@@ -2356,14 +2379,6 @@ async function readCollaboratorsFromWorkbook(file: File) {
   return imported
 }
 
-function getStoredString(key: string, fallback: string) {
-  if (typeof window === 'undefined') {
-    return fallback
-  }
-
-  return window.localStorage.getItem(key) ?? fallback
-}
-
 function getStoredBoolean(key: string, fallback: boolean) {
   if (typeof window === 'undefined') {
     return fallback
@@ -2376,6 +2391,53 @@ function getStoredBoolean(key: string, fallback: boolean) {
   }
 
   return value === 'true'
+}
+
+function getStoredTimes(key: string, fallback: string[]) {
+  if (typeof window === 'undefined') {
+    return fallback
+  }
+
+  const raw = window.localStorage.getItem(key)
+
+  if (!raw) {
+    return fallback
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as unknown
+
+    if (!Array.isArray(parsed)) {
+      return fallback
+    }
+
+    const normalized = parsed
+      .map((item) => (typeof item === 'string' ? item : ''))
+      .filter(Boolean)
+      .slice(0, 3)
+
+    return normalized.length === 3 ? normalized : fallback
+  } catch {
+    return fallback
+  }
+}
+
+function readStoredRunMap(key: string) {
+  if (typeof window === 'undefined') {
+    return {} as Record<string, string>
+  }
+
+  const raw = window.localStorage.getItem(key)
+
+  if (!raw) {
+    return {} as Record<string, string>
+  }
+
+  try {
+    return JSON.parse(raw) as Record<string, string>
+  } catch {
+    return {} as Record<string, string>
+  }
 }
 
 function parseTimeValue(value: string) {
