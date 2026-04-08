@@ -1033,6 +1033,7 @@ export async function fetchAllMissionReportRows(
       rows.push({
         matricula: member.username ?? '-',
         name: member.name,
+        missionId: mission.id,
         missionName: summary.name,
         status: member.missionStatus,
         completedAtLabel: member.completedAtLabel,
