@@ -17,6 +17,7 @@
     "build": "npm run build:web",
     "preview": "vite preview",
     "sync:teams": "node ./scripts/sync-team-members.mjs",
+    "export:reports": "node ./scripts/export-mission-reports.mjs",
     "desktop": "npm run build:desktop && electron .",
     "dist:win": "npm run build:desktop && electron-builder --win nsis"
   },
