@@ -2032,7 +2032,7 @@ async function handleDownloadAllReports(
     const contentRows = rows
       .map(
         (row) =>
-          `<tr><td>${escapeHtml(row.matricula)}</td><td>${escapeHtml(row.name)}</td><td>${escapeHtml(formatMissionMemberStatus(row.status))}</td><td>${escapeHtml(row.completedAtLabel ?? '-')}</td><td>${escapeHtml(row.missionName)}</td></tr>`,
+          `<tr><td>${escapeHtml(row.matricula)}</td><td>${escapeHtml(row.name)}</td><td>${escapeHtml(row.missionId)}</td><td>${escapeHtml(formatMissionMemberStatus(row.status))}</td><td>${escapeHtml(row.completedAtLabel ?? '-')}</td><td>${escapeHtml(row.missionName)}</td></tr>`,
       )
       .join('')
 
@@ -2041,7 +2041,7 @@ async function handleDownloadAllReports(
   <head>
     <meta charset="utf-8" />
     <table>
-      <tr><th>Matricula</th><th>Nome</th><th>Status da Missao</th><th>Data de Conclusao</th><th>Nome da Missao</th></tr>
+      <tr><th>Matricula</th><th>Nome</th><th>ID da Missao</th><th>Status da Missao</th><th>Data de Conclusao</th><th>Nome da Missao</th></tr>
       ${contentRows}
     </table>
   </head>

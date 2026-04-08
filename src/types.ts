@@ -137,6 +137,7 @@ export type CollaboratorMissionMatrix = {
 export type MissionReportRow = {
   matricula: string
   name: string
+  missionId: string
   missionName: string
   status: 'COMPLETED' | 'IN_PROGRESS' | 'NOT_STARTED'
   completedAtLabel: string | null
