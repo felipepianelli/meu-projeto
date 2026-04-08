@@ -50,6 +50,9 @@ const TEAM_PAGE_SIZE = 10
 const COLLABORATOR_PAGE_SIZE = 20
 const ACCESS_SESSION_KEY = 'skore_manager_access_user'
 const ACCESS_USERS_KEY = 'skore_manager_access_users'
+const REPORTS_AUTOMATION_ENABLED_KEY = 'skore_manager_reports_automation_enabled'
+const REPORTS_AUTOMATION_TIME_KEY = 'skore_manager_reports_automation_time'
+const REPORTS_AUTOMATION_LAST_RUN_KEY = 'skore_manager_reports_automation_last_run'
 
 function App() {
   const [activeTab, setActiveTab] = useState('Overview')
@@ -72,6 +75,13 @@ function App() {
   const [isLoadingCollaboratorMatrix, setIsLoadingCollaboratorMatrix] = useState(false)
   const [collaboratorMatrixError, setCollaboratorMatrixError] = useState<string | null>(null)
   const [isExportingReports, setIsExportingReports] = useState(false)
+  const [reportsAutomationEnabled, setReportsAutomationEnabled] = useState(() =>
+    getStoredBoolean(REPORTS_AUTOMATION_ENABLED_KEY, false),
+  )
+  const [reportsAutomationTime, setReportsAutomationTime] = useState(() =>
+    getStoredString(REPORTS_AUTOMATION_TIME_KEY, '08:00'),
+  )
+  const [reportsAutomationFeedback, setReportsAutomationFeedback] = useState<string | null>(null)
   const [editingCollaboratorMatricula, setEditingCollaboratorMatricula] = useState<string | null>(
     null,
   )
@@ -199,6 +209,28 @@ function App() {
     }
   }
 
+  async function runReportsExport(mode: 'manual' | 'automatic') {
+    try {
+      await handleDownloadAllReports(setIsExportingReports)
+
+      if (mode === 'automatic') {
+        const todayStamp = getTodayStamp()
+        window.localStorage.setItem(REPORTS_AUTOMATION_LAST_RUN_KEY, todayStamp)
+        setReportsAutomationFeedback(
+          `Relatorio automatico gerado em ${formatDateTimeNow()}.`,
+        )
+      } else {
+        setReportsAutomationFeedback(`Relatorio gerado em ${formatDateTimeNow()}.`)
+      }
+    } catch (error) {
+      setReportsAutomationFeedback(
+        error instanceof Error ? error.message : 'Falha ao gerar o relatorio.',
+      )
+    }
+
+    window.setTimeout(() => setReportsAutomationFeedback(null), 3200)
+  }
+
   function handleCreateAccessUser(input: {
     name: string
     username: string
@@ -313,6 +345,25 @@ function App() {
   }, [activeTab, canManageUsers])
 
   useEffect(() => {
+    if (typeof window === 'undefined') {
+      return
+    }
+
+    window.localStorage.setItem(
+      REPORTS_AUTOMATION_ENABLED_KEY,
+      reportsAutomationEnabled ? 'true' : 'false',
+    )
+  }, [reportsAutomationEnabled])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return
+    }
+
+    window.localStorage.setItem(REPORTS_AUTOMATION_TIME_KEY, reportsAutomationTime)
+  }, [reportsAutomationTime])
+
+  useEffect(() => {
     void refreshCollaboratorSources({ refreshDashboard: true })
 
     const unsubscribe = subscribeToCollaboratorUpdates((items) => {
@@ -325,6 +376,44 @@ function App() {
 
     return unsubscribe
   }, [])
+
+  useEffect(() => {
+    if (!reportsAutomationEnabled || isExportingReports) {
+      return
+    }
+
+    const intervalId = window.setInterval(() => {
+      if (document.hidden) {
+        return
+      }
+
+      const scheduledTime = parseTimeValue(reportsAutomationTime)
+
+      if (!scheduledTime) {
+        return
+      }
+
+      const now = new Date()
+      const todayStamp = getTodayStamp(now)
+      const lastRunStamp =
+        typeof window !== 'undefined'
+          ? window.localStorage.getItem(REPORTS_AUTOMATION_LAST_RUN_KEY)
+          : null
+
+      if (lastRunStamp === todayStamp) {
+        return
+      }
+
+      const scheduledAt = new Date(now)
+      scheduledAt.setHours(scheduledTime.hours, scheduledTime.minutes, 0, 0)
+
+      if (now >= scheduledAt) {
+        void runReportsExport('automatic')
+      }
+    }, 30000)
+
+    return () => window.clearInterval(intervalId)
+  }, [reportsAutomationEnabled, reportsAutomationTime, isExportingReports])
 
   useEffect(() => {
     if (activeTab !== 'Colaboradores' && activeTab !== 'Matriz') {
@@ -696,10 +785,34 @@ function App() {
                 <p className="mission-empty">
                   Baixe um unico XLS com matricula, nome, status da missao e nome da missao.
                 </p>
+                <div className="reports-automation-card">
+                  <label className="reports-automation-toggle">
+                    <input
+                      type="checkbox"
+                      checked={reportsAutomationEnabled}
+                      onChange={(event) => setReportsAutomationEnabled(event.target.checked)}
+                    />
+                    <span>Gerar automaticamente com o site aberto</span>
+                  </label>
+                  <div className="reports-automation-controls">
+                    <input
+                      className="audience-select"
+                      type="time"
+                      value={reportsAutomationTime}
+                      onChange={(event) => setReportsAutomationTime(event.target.value)}
+                    />
+                    <span className="reports-automation-hint">
+                      O site precisa permanecer aberto nesse horario.
+                    </span>
+                  </div>
+                  {reportsAutomationFeedback ? (
+                    <p className="upload-feedback">{reportsAutomationFeedback}</p>
+                  ) : null}
+                </div>
                 <button
                   className="primary-button"
                   type="button"
-                  onClick={() => void handleDownloadAllReports(setIsExportingReports)}
+                  onClick={() => void runReportsExport('manual')}
                   disabled={isExportingReports}
                 >
                   {isExportingReports ? 'Gerando relatorio...' : 'Baixar todos os relatorios'}
@@ -2241,6 +2354,58 @@ async function readCollaboratorsFromWorkbook(file: File) {
   }
 
   return imported
+}
+
+function getStoredString(key: string, fallback: string) {
+  if (typeof window === 'undefined') {
+    return fallback
+  }
+
+  return window.localStorage.getItem(key) ?? fallback
+}
+
+function getStoredBoolean(key: string, fallback: boolean) {
+  if (typeof window === 'undefined') {
+    return fallback
+  }
+
+  const value = window.localStorage.getItem(key)
+
+  if (value === null) {
+    return fallback
+  }
+
+  return value === 'true'
+}
+
+function parseTimeValue(value: string) {
+  const match = value.match(/^(\d{2}):(\d{2})$/)
+
+  if (!match) {
+    return null
+  }
+
+  return {
+    hours: Number(match[1]),
+    minutes: Number(match[2]),
+  }
+}
+
+function getTodayStamp(date = new Date()) {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+function formatDateTimeNow() {
+  return new Intl.DateTimeFormat('pt-BR', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(new Date())
 }
 
 function NavIcon({ icon }: { icon: string }) {
