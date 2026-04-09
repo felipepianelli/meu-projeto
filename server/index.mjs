@@ -14,6 +14,10 @@ const dbPath =
   process.env.COLLABORATORS_DB_PATH ||
   path.join(__dirname, 'data', 'collaborators-db.json')
 const dbDir = path.dirname(dbPath)
+const accessUsersDbPath =
+  process.env.ACCESS_USERS_DB_PATH ||
+  path.join(__dirname, 'data', 'access-users-db.json')
+const accessUsersDbDir = path.dirname(accessUsersDbPath)
 const teamCacheDbPath =
   process.env.TEAM_CACHE_DB_PATH ||
   path.join(__dirname, 'data', 'team-members-cache-db.json')
@@ -25,6 +29,7 @@ const host = process.env.HOST || '0.0.0.0'
 const supabaseUrl = process.env.SUPABASE_URL?.trim() || ''
 const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim() || ''
 const collaboratorsTable = process.env.SUPABASE_COLLABORATORS_TABLE?.trim() || 'collaborators'
+const accessUsersTable = process.env.SUPABASE_ACCESS_USERS_TABLE?.trim() || 'access_users'
 const teamCacheTable = process.env.SUPABASE_TEAM_CACHE_TABLE?.trim() || 'team_member_cache'
 const skoreApiToken =
   process.env.SKORE_API_TOKEN?.trim() || process.env.VITE_SKORE_API_TOKEN?.trim() || ''
@@ -36,6 +41,7 @@ const teamAuditCacheTtlMs = 5 * 60 * 1000
 const collaboratorAuditBatchSize = 12
 
 fs.mkdirSync(dbDir, { recursive: true })
+fs.mkdirSync(accessUsersDbDir, { recursive: true })
 fs.mkdirSync(teamCacheDbDir, { recursive: true })
 
 const usingSupabase = Boolean(supabaseUrl && supabaseServiceRoleKey)
@@ -55,6 +61,35 @@ let collaboratorUsersAuditCache = {
   expiresAt: 0,
   promise: null,
 }
+
+const defaultAccessUsers = [
+  {
+    id: 'felipe-admin-plus',
+    name: 'Felipe Souza',
+    username: 'felipe.souza',
+    password: 'Felipe@2026',
+    role: 'admin_plus',
+    description:
+      'Pode visualizar, associar audiencia, incluir pessoas, remover pessoas e administrar usuarios do prototipo.',
+  },
+  {
+    id: 'admin-operacional',
+    name: 'Admin Operacional',
+    username: 'admin.operacional',
+    password: 'Admin@2026',
+    role: 'admin',
+    description:
+      'Pode gerenciar missoes, times e pessoas, mas nao acessa a aba de usuarios.',
+  },
+  {
+    id: 'viewer-basico',
+    name: 'Visualizacao Basica',
+    username: 'visual.basico',
+    password: 'Visual@2026',
+    role: 'viewer',
+    description: 'Pode apenas visualizar telas e baixar arquivos XLS.',
+  },
+]
 
 const app = express()
 const httpServer = createServer(app)
@@ -127,6 +162,26 @@ function readFileDatabase() {
 
 function writeFileDatabase(database) {
   fs.writeFileSync(dbPath, JSON.stringify(database, null, 2), 'utf8')
+}
+
+function ensureAccessUsersFileDatabase() {
+  if (fs.existsSync(accessUsersDbPath)) {
+    return
+  }
+
+  writeAccessUsersFileDatabase({
+    updatedAt: new Date().toISOString(),
+    items: defaultAccessUsers,
+  })
+}
+
+function readAccessUsersFileDatabase() {
+  ensureAccessUsersFileDatabase()
+  return parseJsonFile(accessUsersDbPath)
+}
+
+function writeAccessUsersFileDatabase(database) {
+  fs.writeFileSync(accessUsersDbPath, JSON.stringify(database, null, 2), 'utf8')
 }
 
 function ensureTeamCacheFileDatabase() {
@@ -206,6 +261,34 @@ async function ensureSupabaseSeed() {
   }
 }
 
+async function ensureSupabaseAccessUsersSeed() {
+  if (!supabase) {
+    return
+  }
+
+  const { count, error } = await supabase
+    .from(accessUsersTable)
+    .select('*', { count: 'exact', head: true })
+
+  if (error) {
+    if (isSupabaseMissingTableError(error)) {
+      return
+    }
+
+    throw error
+  }
+
+  if ((count ?? 0) > 0) {
+    return
+  }
+
+  const { error: insertError } = await supabase.from(accessUsersTable).insert(defaultAccessUsers)
+
+  if (insertError && !isSupabaseMissingTableError(insertError)) {
+    throw insertError
+  }
+}
+
 async function listCollaborators() {
   if (supabase) {
     const { data, error } = await supabase
@@ -281,6 +364,217 @@ async function getCollaboratorsPayloadForAudit() {
       updatedAt: new Date().toISOString(),
     }
   }
+}
+
+function validateAccessUser(input) {
+  const name = String(input?.name ?? '').trim()
+  const username = String(input?.username ?? '').trim()
+  const password = String(input?.password ?? '').trim()
+  const role = String(input?.role ?? '').trim()
+
+  if (!name) {
+    return { error: 'O nome e obrigatorio.' }
+  }
+
+  if (!username) {
+    return { error: 'O usuario e obrigatorio.' }
+  }
+
+  if (!password) {
+    return { error: 'A senha e obrigatoria.' }
+  }
+
+  if (!['admin_plus', 'admin', 'viewer'].includes(role)) {
+    return { error: 'O perfil informado e invalido.' }
+  }
+
+  return {
+    name,
+    username,
+    password,
+    role,
+    description:
+      role === 'admin_plus'
+        ? 'Pode visualizar, editar e administrar usuarios.'
+        : role === 'admin'
+          ? 'Pode editar tudo, menos a aba de usuarios.'
+          : 'Pode visualizar e baixar arquivos XLS.',
+  }
+}
+
+async function listAccessUsers() {
+  if (supabase) {
+    const { data, error } = await supabase
+      .from(accessUsersTable)
+      .select('id,name,username,password,role,description')
+      .order('name', { ascending: true })
+
+    if (error) {
+      if (!isSupabaseMissingTableError(error)) {
+        throw error
+      }
+    } else {
+      return data ?? []
+    }
+  }
+
+  return readAccessUsersFileDatabase().items
+    .slice()
+    .sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'))
+}
+
+async function createAccessUserRecord(input) {
+  const item = {
+    id: `custom-${Date.now()}`,
+    ...input,
+  }
+
+  if (supabase) {
+    const { data: duplicate, error: duplicateError } = await supabase
+      .from(accessUsersTable)
+      .select('id')
+      .eq('username', item.username)
+      .maybeSingle()
+
+    if (duplicateError && !isSupabaseMissingTableError(duplicateError)) {
+      throw duplicateError
+    }
+
+    if (duplicate) {
+      throw new Error('Ja existe um usuario com esse login.')
+    }
+
+    if (!isSupabaseMissingTableError(duplicateError)) {
+      const { data, error } = await supabase
+        .from(accessUsersTable)
+        .insert(item)
+        .select('id,name,username,password,role,description')
+        .single()
+
+      if (error) {
+        throw error
+      }
+
+      return data
+    }
+  }
+
+  const database = readAccessUsersFileDatabase()
+
+  if (
+    database.items.some(
+      (user) => user.username.toLowerCase() === item.username.toLowerCase(),
+    )
+  ) {
+    throw new Error('Ja existe um usuario com esse login.')
+  }
+
+  database.items.push(item)
+  database.updatedAt = new Date().toISOString()
+  writeAccessUsersFileDatabase(database)
+  return item
+}
+
+async function updateAccessUserRecord(userId, input) {
+  if (supabase) {
+    const { data: existing, error: existingError } = await supabase
+      .from(accessUsersTable)
+      .select('id')
+      .eq('id', userId)
+      .maybeSingle()
+
+    if (existingError && !isSupabaseMissingTableError(existingError)) {
+      throw existingError
+    }
+
+    if (existing) {
+      const { data: duplicate, error: duplicateError } = await supabase
+        .from(accessUsersTable)
+        .select('id')
+        .eq('username', input.username)
+        .neq('id', userId)
+        .maybeSingle()
+
+      if (duplicateError) {
+        throw duplicateError
+      }
+
+      if (duplicate) {
+        throw new Error('Ja existe um usuario com esse login.')
+      }
+
+      const { data, error } = await supabase
+        .from(accessUsersTable)
+        .update(input)
+        .eq('id', userId)
+        .select('id,name,username,password,role,description')
+        .single()
+
+      if (error) {
+        throw error
+      }
+
+      return data
+    }
+  }
+
+  const database = readAccessUsersFileDatabase()
+  const existing = database.items.find((user) => user.id === userId)
+
+  if (!existing) {
+    throw new Error('Usuario nao encontrado.')
+  }
+
+  if (
+    database.items.some(
+      (user) =>
+        user.id !== userId && user.username.toLowerCase() === input.username.toLowerCase(),
+    )
+  ) {
+    throw new Error('Ja existe um usuario com esse login.')
+  }
+
+  database.items = database.items.map((user) =>
+    user.id === userId
+      ? {
+          ...user,
+          ...input,
+        }
+      : user,
+  )
+  database.updatedAt = new Date().toISOString()
+  writeAccessUsersFileDatabase(database)
+
+  return database.items.find((user) => user.id === userId)
+}
+
+async function deleteAccessUserRecord(userId) {
+  if (supabase) {
+    const { data, error } = await supabase
+      .from(accessUsersTable)
+      .delete()
+      .eq('id', userId)
+      .select('id')
+
+    if (error && !isSupabaseMissingTableError(error)) {
+      throw error
+    }
+
+    if (data?.length) {
+      return
+    }
+  }
+
+  const database = readAccessUsersFileDatabase()
+  const nextItems = database.items.filter((user) => user.id !== userId)
+
+  if (nextItems.length === database.items.length) {
+    throw new Error('Usuario nao encontrado.')
+  }
+
+  database.items = nextItems
+  database.updatedAt = new Date().toISOString()
+  writeAccessUsersFileDatabase(database)
 }
 
 async function listTeamCacheMembers(options = {}) {
@@ -842,6 +1136,14 @@ function mapErrorStatus(error) {
     return 400
   }
 
+  if (message === 'O perfil informado e invalido.' || message === 'O nome e obrigatorio.' || message === 'O usuario e obrigatorio.' || message === 'A senha e obrigatoria.') {
+    return 400
+  }
+
+  if (message === 'Usuario nao encontrado.') {
+    return 404
+  }
+
   return 500
 }
 
@@ -882,6 +1184,91 @@ app.get('/api/collaborators', async (_request, response, next) => {
 
     response.json(await getCollaboratorsPayload())
   } catch (error) {
+    next(error)
+  }
+})
+
+app.get('/api/access-users', async (_request, response, next) => {
+  try {
+    if (supabase) {
+      await ensureSupabaseAccessUsersSeed()
+    }
+
+    const items = await listAccessUsers()
+    response.json({
+      items,
+      total: items.length,
+      updatedAt: new Date().toISOString(),
+    })
+  } catch (error) {
+    next(error)
+  }
+})
+
+app.post('/api/access-users', async (request, response, next) => {
+  try {
+    const parsed = validateAccessUser(request.body)
+
+    if ('error' in parsed) {
+      response.status(400).json(parsed)
+      return
+    }
+
+    const item = await createAccessUserRecord(parsed)
+    response.status(201).json({ item })
+  } catch (error) {
+    const status = mapErrorStatus(error)
+
+    if (status !== 500) {
+      response.status(status).json({
+        error: error instanceof Error ? error.message : 'Erro interno no servidor.',
+      })
+      return
+    }
+
+    next(error)
+  }
+})
+
+app.patch('/api/access-users/:id', async (request, response, next) => {
+  try {
+    const parsed = validateAccessUser(request.body)
+
+    if ('error' in parsed) {
+      response.status(400).json(parsed)
+      return
+    }
+
+    const item = await updateAccessUserRecord(String(request.params.id ?? '').trim(), parsed)
+    response.json({ item })
+  } catch (error) {
+    const status = mapErrorStatus(error)
+
+    if (status !== 500) {
+      response.status(status).json({
+        error: error instanceof Error ? error.message : 'Erro interno no servidor.',
+      })
+      return
+    }
+
+    next(error)
+  }
+})
+
+app.delete('/api/access-users/:id', async (request, response, next) => {
+  try {
+    await deleteAccessUserRecord(String(request.params.id ?? '').trim())
+    response.status(204).end()
+  } catch (error) {
+    const status = mapErrorStatus(error)
+
+    if (status !== 500) {
+      response.status(status).json({
+        error: error instanceof Error ? error.message : 'Erro interno no servidor.',
+      })
+      return
+    }
+
     next(error)
   }
 })
