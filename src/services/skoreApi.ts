@@ -107,8 +107,84 @@ type CollaboratorsApiResponse = {
   updatedAt: string
 }
 
+type TeamCacheMemberRecord = {
+  teamId: number
+  teamName: string
+  userId: number
+  matricula: string
+  nome: string
+  source: string
+  updatedAt: string
+}
+
+type TeamCacheApiResponse = {
+  items: TeamCacheMemberRecord[]
+  total: number
+  updatedAt: string
+}
+
 function getTeamUsersUrl(teamId: number) {
   return `${getTeamsUrl()}/${teamId}/users`
+}
+
+async function fetchTeamCacheMembers(teamId?: number) {
+  if (!hasCollaboratorsBackend()) {
+    return [] as TeamCacheMemberRecord[]
+  }
+
+  const url = new URL(`${collaboratorsApiUrl}/api/team-cache`)
+
+  if (typeof teamId === 'number' && Number.isFinite(teamId)) {
+    url.searchParams.set('teamId', String(teamId))
+  }
+
+  const payload = await readJson<TeamCacheApiResponse>(url.toString(), {
+    headers: {
+      Accept: 'application/json',
+    },
+  })
+
+  return payload.items ?? []
+}
+
+export async function persistTeamCacheMembers(
+  teamId: number,
+  teamName: string,
+  users: Array<{ id: number; username: string | null; name: string }>,
+) {
+  if (!hasCollaboratorsBackend()) {
+    return
+  }
+
+  const items = users
+    .map((user) => ({
+      userId: user.id,
+      matricula: String(user.username ?? '').trim(),
+      nome: user.name,
+    }))
+    .filter((user) => Number.isFinite(user.userId) && user.userId > 0 && user.matricula && user.nome)
+
+  if (!items.length) {
+    return
+  }
+
+  const response = await fetch(`${collaboratorsApiUrl}/api/team-cache/upsert`, {
+    method: 'POST',
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      teamId,
+      teamName,
+      items,
+    }),
+  })
+
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null
+    throw new Error(payload?.error ?? `Falha ao atualizar o cache do time (${response.status})`)
+  }
 }
 
 function getConfiguredToken() {
@@ -482,26 +558,26 @@ export async function fetchMembersForTeam(
   teamId: number,
   _options?: { refresh?: boolean },
 ): Promise<TeamMember[]> {
-  const team = await readJson<SkoreTeamDetailApiItem>(`${getTeamsUrl()}/${teamId}`, {
-    headers: {
-      Accept: 'application/json',
-      'Content-Type': 'application/json',
-      ...getAuthHeaders(),
-    },
-  })
+  const userDetailsCache = new Map<string, Promise<SkoreUserDetailApiItem | null>>()
+  const [team, cachedMembers] = await Promise.all([
+    readJson<SkoreTeamDetailApiItem>(`${getTeamsUrl()}/${teamId}`, {
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        ...getAuthHeaders(),
+      },
+    }),
+    fetchTeamCacheMembers(teamId).catch(() => [] as TeamCacheMemberRecord[]),
+  ])
 
   const userIds = Array.from(new Set(team.userIds ?? []))
+  const users = userIds.length
+    ? await Promise.all(
+        userIds.map((userId) => fetchUserDetailCached(String(userId), userDetailsCache)),
+      )
+    : []
 
-  if (!userIds.length) {
-    return []
-  }
-
-  const userDetailsCache = new Map<string, Promise<SkoreUserDetailApiItem | null>>()
-  const users = await Promise.all(
-    userIds.map((userId) => fetchUserDetailCached(String(userId), userDetailsCache)),
-  )
-
-  return users
+  return [...users
     .filter((user): user is SkoreUserDetailApiItem => Boolean(user))
     .map((user) => ({
       id: user.id,
@@ -512,7 +588,19 @@ export async function fetchMembersForTeam(
       inSpreadsheet: user.username
         ? getCollaboratorContext().allowedMatriculas.has(user.username)
         : false,
-    }))
+    })), ...cachedMembers.map((member) => ({
+      id: member.userId,
+      name: member.nome,
+      username: member.matricula,
+      inSpreadsheet: getCollaboratorContext().allowedMatriculas.has(member.matricula),
+    }))]
+    .filter(
+      (member, index, array) =>
+        array.findIndex(
+          (candidate) =>
+            candidate.id === member.id || candidate.username === member.username,
+        ) === index,
+    )
     .sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'))
 }
 
@@ -1660,10 +1748,13 @@ async function buildCollaboratorMissionMatrix(
   signal?: AbortSignal,
 ): Promise<CollaboratorMissionMatrix> {
   const { collaboratorRows } = getCollaboratorContext()
-  const activeUsers = await findUsersByMatriculas(
-    collaboratorRows.map((item) => item.matricula),
-    signal,
-  )
+  const [activeUsers, cachedTeamMembers] = await Promise.all([
+    findUsersByMatriculas(
+      collaboratorRows.map((item) => item.matricula),
+      signal,
+    ),
+    fetchTeamCacheMembers().catch(() => [] as TeamCacheMemberRecord[]),
+  ])
   const teamNamesByMatricula = new Map(
     activeUsers
       .filter((user) => user.username)
@@ -1674,6 +1765,19 @@ async function buildCollaboratorMissionMatrix(
         ),
       ]),
   )
+  cachedTeamMembers.forEach((member) => {
+    if (!member.matricula || !member.teamName) {
+      return
+    }
+
+    const current = teamNamesByMatricula.get(member.matricula) ?? []
+
+    if (!current.includes(member.teamName)) {
+      current.push(member.teamName)
+      current.sort((a, b) => a.localeCompare(b, 'pt-BR'))
+      teamNamesByMatricula.set(member.matricula, current)
+    }
+  })
   const collaborators = collaboratorRows
     .map((item) => ({
       matricula: item.matricula,
