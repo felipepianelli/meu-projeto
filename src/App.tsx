@@ -17,6 +17,7 @@ import {
   fetchMissionAudienceMembers,
   findUsersByMatriculas,
   importCollaborators,
+  persistTeamCacheMembers,
   removeTeamsFromMissionAudience,
   removeUsersFromMissionAudience,
   subscribeToCollaboratorUpdates,
@@ -1101,9 +1102,10 @@ function MissionTeamItem({
         team.id,
         users.map((user) => user.id),
       )
+      await persistTeamCacheMembers(team.id, team.name, users)
       clearUsersCache()
       setUploadMessage(
-        `${users.length} colaborador(es) enviados para participacao no time ${team.name}.`,
+        `${users.length} colaborador(es) enviados para participacao no time ${team.name} e preservados no cache online.`,
       )
     } catch (error) {
       setUploadMessage(
