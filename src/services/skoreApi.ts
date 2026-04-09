@@ -3,6 +3,7 @@ import { missionAudienceCatalog } from '../data/missionAudienceCatalog'
 import collaborators from '../data/collaborators.json'
 import { io, type Socket } from 'socket.io-client'
 import type {
+  AccessUser,
   CollaboratorRecord,
   CollaboratorMissionMatrix,
   ConnectionStatus,
@@ -103,6 +104,12 @@ function sanitizeFileName(value: string) {
 
 type CollaboratorsApiResponse = {
   items: CollaboratorRecord[]
+  total: number
+  updatedAt: string
+}
+
+type AccessUsersApiResponse = {
+  items: AccessUser[]
   total: number
   updatedAt: string
 }
@@ -1519,6 +1526,104 @@ export async function importCollaborators(records: CollaboratorRecord[]) {
   persistCollaboratorsDb(normalized)
   clearUsersCache()
   return normalized.length
+}
+
+export async function syncAccessUsersFromServer(fallbackUsers: AccessUser[]) {
+  if (!hasCollaboratorsBackend()) {
+    return fallbackUsers
+  }
+
+  try {
+    const payload = await readJson<AccessUsersApiResponse>(
+      `${collaboratorsApiUrl}/api/access-users`,
+      {
+        headers: {
+          Accept: 'application/json',
+        },
+      },
+    )
+
+    return payload.items.sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'))
+  } catch {
+    return fallbackUsers
+  }
+}
+
+export async function createAccessUser(record: {
+  name: string
+  username: string
+  password: string
+  role: AccessUser['role']
+}) {
+  if (!hasCollaboratorsBackend()) {
+    return null
+  }
+
+  const response = await fetch(`${collaboratorsApiUrl}/api/access-users`, {
+    method: 'POST',
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(record),
+  })
+
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null
+    throw new Error(payload?.error ?? `Falha ao criar usuario (${response.status})`)
+  }
+
+  const payload = (await response.json()) as { item: AccessUser }
+  return payload.item
+}
+
+export async function updateAccessUser(
+  userId: string,
+  record: {
+    name: string
+    username: string
+    password: string
+    role: AccessUser['role']
+  },
+) {
+  if (!hasCollaboratorsBackend()) {
+    return null
+  }
+
+  const response = await fetch(`${collaboratorsApiUrl}/api/access-users/${encodeURIComponent(userId)}`, {
+    method: 'PATCH',
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(record),
+  })
+
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null
+    throw new Error(payload?.error ?? `Falha ao atualizar usuario (${response.status})`)
+  }
+
+  const payload = (await response.json()) as { item: AccessUser }
+  return payload.item
+}
+
+export async function deleteAccessUser(userId: string) {
+  if (!hasCollaboratorsBackend()) {
+    return
+  }
+
+  const response = await fetch(`${collaboratorsApiUrl}/api/access-users/${encodeURIComponent(userId)}`, {
+    method: 'DELETE',
+    headers: {
+      Accept: 'application/json',
+    },
+  })
+
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null
+    throw new Error(payload?.error ?? `Falha ao excluir usuario (${response.status})`)
+  }
 }
 
 export function subscribeToCollaboratorUpdates(
