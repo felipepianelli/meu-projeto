@@ -9,7 +9,9 @@ import {
   addUsersToMissionAudience,
   clearUsersCache,
   createCollaborator,
+  createAccessUser as createAccessUserOnline,
   deleteCollaborator,
+  deleteAccessUser as deleteAccessUserOnline,
   downloadTeamAuditCsvFromBackend,
   fetchAllMissionReportRows,
   fetchCollaboratorMissionMatrix,
@@ -21,7 +23,9 @@ import {
   removeTeamsFromMissionAudience,
   removeUsersFromMissionAudience,
   subscribeToCollaboratorUpdates,
+  syncAccessUsersFromServer,
   syncCollaboratorsFromServer,
+  updateAccessUser as updateAccessUserOnline,
   updateCollaborator,
 } from './services/skoreApi'
 import type {
@@ -284,6 +288,7 @@ function App() {
     password: string
     role: AccessUser['role']
   }) {
+    void (async () => {
     const normalizedUsername = input.username.trim()
 
     if (
@@ -309,10 +314,24 @@ function App() {
             : 'Pode visualizar e baixar arquivos XLS.',
     }
 
-    const nextUsers = [...accessUsersState, createdUser]
-    setAccessUsersState(nextUsers)
-    persistAccessUsers(nextUsers)
-    setAccessError(null)
+      try {
+        await createAccessUserOnline({
+          name: createdUser.name,
+          username: createdUser.username,
+          password: createdUser.password,
+          role: createdUser.role,
+        })
+
+        const nextUsers = await syncAccessUsersFromServer([...accessUsersState, createdUser])
+        setAccessUsersState(nextUsers)
+        persistAccessUsers(nextUsers)
+        setAccessError(null)
+      } catch (error) {
+        setAccessError(
+          error instanceof Error ? error.message : 'Falha ao criar usuario.',
+        )
+      }
+    })()
   }
 
   function handleUpdateAccessUser(
@@ -324,6 +343,7 @@ function App() {
       role: AccessUser['role']
     },
   ) {
+    void (async () => {
     const normalizedUsername = input.username.trim()
     const duplicate = accessUsersState.some(
       (user) =>
@@ -336,7 +356,7 @@ function App() {
       return
     }
 
-    const nextUsers = accessUsersState.map((user) =>
+      const optimisticUsers = accessUsersState.map((user) =>
       user.id === userId
         ? {
             ...user,
@@ -350,39 +370,65 @@ function App() {
                 : input.role === 'admin'
                   ? 'Pode editar tudo, menos a aba de usuarios.'
                   : 'Pode visualizar e baixar arquivos XLS.',
-          }
+        }
         : user,
     )
 
-    setAccessUsersState(nextUsers)
-    persistAccessUsers(nextUsers)
-    setEditingAccessUserId(null)
-    setAccessError(null)
+      try {
+        await updateAccessUserOnline(userId, {
+          name: input.name.trim(),
+          username: normalizedUsername,
+          password: input.password,
+          role: input.role,
+        })
 
-    if (currentAccessUser?.id === userId) {
-      const updatedCurrent = nextUsers.find((user) => user.id === userId) ?? null
-      setCurrentAccessUser(updatedCurrent)
+        const nextUsers = await syncAccessUsersFromServer(optimisticUsers)
+        setAccessUsersState(nextUsers)
+        persistAccessUsers(nextUsers)
+        setEditingAccessUserId(null)
+        setAccessError(null)
 
-      if (updatedCurrent) {
-        persistAccessUser(updatedCurrent)
+        if (currentAccessUser?.id === userId) {
+          const updatedCurrent = nextUsers.find((user) => user.id === userId) ?? null
+          setCurrentAccessUser(updatedCurrent)
+
+          if (updatedCurrent) {
+            persistAccessUser(updatedCurrent)
+          }
+        }
+      } catch (error) {
+        setAccessError(
+          error instanceof Error ? error.message : 'Falha ao atualizar usuario.',
+        )
       }
-    }
+    })()
   }
 
   function handleDeleteAccessUser(userId: string) {
+    void (async () => {
     if (currentAccessUser?.id === userId) {
       setAccessError('Nao e possivel excluir o usuario atualmente logado.')
       return
     }
 
-    const nextUsers = accessUsersState.filter((user) => user.id !== userId)
-    setAccessUsersState(nextUsers)
-    persistAccessUsers(nextUsers)
-    setAccessError(null)
+      try {
+        await deleteAccessUserOnline(userId)
+        const nextUsers = await syncAccessUsersFromServer(
+          accessUsersState.filter((user) => user.id !== userId),
+        )
+        setAccessUsersState(nextUsers)
+        persistAccessUsers(nextUsers)
+        setAccessError(null)
 
-    if (editingAccessUserId === userId) {
-      setEditingAccessUserId(null)
-    }
+        if (editingAccessUserId === userId) {
+          setEditingAccessUserId(null)
+        }
+      } catch (error) {
+        setAccessError(
+          error instanceof Error ? error.message : 'Falha ao excluir usuario.',
+        )
+      }
+    })()
   }
 
   useEffect(() => {
@@ -431,6 +477,19 @@ function App() {
       JSON.stringify(reportsAutomationTimes),
     )
   }, [reportsAutomationTimes])
+
+  useEffect(() => {
+    void syncAccessUsersFromServer(accessUsersState).then((items) => {
+      setAccessUsersState(items)
+      persistAccessUsers(items)
+      const nextCurrent = getInitialAccessUserFromList(items)
+      setCurrentAccessUser((current) =>
+        current ? items.find((user) => user.id === current.id) ?? nextCurrent : nextCurrent,
+      )
+    })
+
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   useEffect(() => {
     void refreshCollaboratorSources({ refreshDashboard: true })
