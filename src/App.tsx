@@ -50,6 +50,9 @@ const TEAM_PAGE_SIZE = 10
 const COLLABORATOR_PAGE_SIZE = 20
 const ACCESS_SESSION_KEY = 'skore_manager_access_user'
 const ACCESS_USERS_KEY = 'skore_manager_access_users'
+const TIMES_AUTOMATION_ENABLED_KEY = 'skore_manager_times_automation_enabled'
+const TIMES_AUTOMATION_TIME_KEY = 'skore_manager_times_automation_time'
+const TIMES_AUTOMATION_LAST_RUN_KEY = 'skore_manager_times_automation_last_run'
 const REPORTS_AUTOMATION_ENABLED_KEY = 'skore_manager_reports_automation_enabled'
 const REPORTS_AUTOMATION_TIMES_KEY = 'skore_manager_reports_automation_times'
 const REPORTS_AUTOMATION_LAST_RUN_KEY = 'skore_manager_reports_automation_last_run'
@@ -74,6 +77,14 @@ function App() {
   )
   const [isLoadingCollaboratorMatrix, setIsLoadingCollaboratorMatrix] = useState(false)
   const [collaboratorMatrixError, setCollaboratorMatrixError] = useState<string | null>(null)
+  const [isSyncingTimes, setIsSyncingTimes] = useState(false)
+  const [timesAutomationEnabled, setTimesAutomationEnabled] = useState(() =>
+    getStoredBoolean(TIMES_AUTOMATION_ENABLED_KEY, false),
+  )
+  const [timesAutomationTime, setTimesAutomationTime] = useState(() =>
+    getStoredTime(TIMES_AUTOMATION_TIME_KEY, '07:00'),
+  )
+  const [timesAutomationFeedback, setTimesAutomationFeedback] = useState<string | null>(null)
   const [isExportingReports, setIsExportingReports] = useState(false)
   const [reportsAutomationEnabled, setReportsAutomationEnabled] = useState(() =>
     getStoredBoolean(REPORTS_AUTOMATION_ENABLED_KEY, false),
@@ -236,6 +247,36 @@ function App() {
     window.setTimeout(() => setReportsAutomationFeedback(null), 3200)
   }
 
+  async function runTimesSync(mode: 'manual' | 'automatic') {
+    setIsSyncingTimes(true)
+
+    try {
+      clearUsersCache()
+      setCollaboratorMatrix(null)
+      await refresh()
+
+      if (mode === 'automatic') {
+        const todayStamp = getTodayStamp()
+        window.localStorage.setItem(TIMES_AUTOMATION_LAST_RUN_KEY, todayStamp)
+        setTimesAutomationFeedback(
+          `Cargas de times atualizadas automaticamente em ${formatDateTimeNow()}.`,
+        )
+      } else {
+        setTimesAutomationFeedback(
+          `Cargas de times atualizadas em ${formatDateTimeNow()}.`,
+        )
+      }
+    } catch (error) {
+      setTimesAutomationFeedback(
+        error instanceof Error ? error.message : 'Falha ao atualizar as cargas de times.',
+      )
+    } finally {
+      setIsSyncingTimes(false)
+    }
+
+    window.setTimeout(() => setTimesAutomationFeedback(null), 3200)
+  }
+
   function handleCreateAccessUser(input: {
     name: string
     username: string
@@ -355,6 +396,25 @@ function App() {
     }
 
     window.localStorage.setItem(
+      TIMES_AUTOMATION_ENABLED_KEY,
+      timesAutomationEnabled ? 'true' : 'false',
+    )
+  }, [timesAutomationEnabled])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return
+    }
+
+    window.localStorage.setItem(TIMES_AUTOMATION_TIME_KEY, timesAutomationTime)
+  }, [timesAutomationTime])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return
+    }
+
+    window.localStorage.setItem(
       REPORTS_AUTOMATION_ENABLED_KEY,
       reportsAutomationEnabled ? 'true' : 'false',
     )
@@ -384,6 +444,44 @@ function App() {
 
     return unsubscribe
   }, [])
+
+  useEffect(() => {
+    if (!timesAutomationEnabled || isSyncingTimes) {
+      return
+    }
+
+    const intervalId = window.setInterval(() => {
+      if (document.hidden) {
+        return
+      }
+
+      const scheduledTime = parseTimeValue(timesAutomationTime)
+
+      if (!scheduledTime) {
+        return
+      }
+
+      const now = new Date()
+      const todayStamp = getTodayStamp(now)
+      const lastRunStamp =
+        typeof window !== 'undefined'
+          ? window.localStorage.getItem(TIMES_AUTOMATION_LAST_RUN_KEY)
+          : null
+
+      if (lastRunStamp === todayStamp) {
+        return
+      }
+
+      const scheduledAt = new Date(now)
+      scheduledAt.setHours(scheduledTime.hours, scheduledTime.minutes, 0, 0)
+
+      if (now >= scheduledAt) {
+        void runTimesSync('automatic')
+      }
+    }, 30000)
+
+    return () => window.clearInterval(intervalId)
+  }, [timesAutomationEnabled, timesAutomationTime, isSyncingTimes])
 
   useEffect(() => {
     if (!reportsAutomationEnabled || isExportingReports) {
@@ -719,6 +817,46 @@ function App() {
                   A auditoria dos times e preparada em segundo plano durante esta sessao para acelerar os downloads.
                 </p>
               ) : null}
+
+              <div className="reports-automation-card">
+                <label className="reports-automation-toggle">
+                  <input
+                    type="checkbox"
+                    checked={timesAutomationEnabled}
+                    onChange={(event) => setTimesAutomationEnabled(event.target.checked)}
+                  />
+                  <span>Atualizar cargas de times automaticamente com o site aberto</span>
+                </label>
+
+                <div className="reports-automation-times">
+                  <div className="reports-automation-controls">
+                    <span className="reports-automation-label">Horario diario</span>
+                    <input
+                      className="audience-select"
+                      type="time"
+                      value={timesAutomationTime}
+                      onChange={(event) => setTimesAutomationTime(event.target.value)}
+                    />
+                  </div>
+                </div>
+
+                <span className="reports-automation-hint">
+                  O site limpa os caches locais da sessao e recarrega os times no horario configurado.
+                </span>
+
+                {timesAutomationFeedback ? (
+                  <p className="upload-feedback">{timesAutomationFeedback}</p>
+                ) : null}
+
+                <button
+                  className="secondary-button"
+                  type="button"
+                  onClick={() => void runTimesSync('manual')}
+                  disabled={isSyncingTimes || isRefreshing}
+                >
+                  {isSyncingTimes ? 'Atualizando times...' : 'Atualizar cargas de times agora'}
+                </button>
+              </div>
 
               <div className="mission-team-list">
                 {teams.map((team) =>
@@ -2420,6 +2558,20 @@ function getStoredTimes(key: string, fallback: string[]) {
   } catch {
     return fallback
   }
+}
+
+function getStoredTime(key: string, fallback: string) {
+  if (typeof window === 'undefined') {
+    return fallback
+  }
+
+  const value = window.localStorage.getItem(key)
+
+  if (!value || !parseTimeValue(value)) {
+    return fallback
+  }
+
+  return value
 }
 
 function readStoredRunMap(key: string) {
