@@ -14,6 +14,10 @@ const dbPath =
   process.env.COLLABORATORS_DB_PATH ||
   path.join(__dirname, 'data', 'collaborators-db.json')
 const dbDir = path.dirname(dbPath)
+const teamCacheDbPath =
+  process.env.TEAM_CACHE_DB_PATH ||
+  path.join(__dirname, 'data', 'team-members-cache-db.json')
+const teamCacheDbDir = path.dirname(teamCacheDbPath)
 const collaboratorsSeedPath = path.join(rootDir, 'src', 'data', 'collaborators.json')
 const parsedPort = Number(process.env.PORT)
 const port = Number.isFinite(parsedPort) && parsedPort > 0 ? parsedPort : 3030
@@ -21,6 +25,7 @@ const host = process.env.HOST || '0.0.0.0'
 const supabaseUrl = process.env.SUPABASE_URL?.trim() || ''
 const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim() || ''
 const collaboratorsTable = process.env.SUPABASE_COLLABORATORS_TABLE?.trim() || 'collaborators'
+const teamCacheTable = process.env.SUPABASE_TEAM_CACHE_TABLE?.trim() || 'team_member_cache'
 const skoreApiToken =
   process.env.SKORE_API_TOKEN?.trim() || process.env.VITE_SKORE_API_TOKEN?.trim() || ''
 const skoreUsersUrl =
@@ -31,6 +36,7 @@ const teamAuditCacheTtlMs = 5 * 60 * 1000
 const collaboratorAuditBatchSize = 12
 
 fs.mkdirSync(dbDir, { recursive: true })
+fs.mkdirSync(teamCacheDbDir, { recursive: true })
 
 const usingSupabase = Boolean(supabaseUrl && supabaseServiceRoleKey)
 const supabase = usingSupabase
@@ -121,6 +127,52 @@ function readFileDatabase() {
 
 function writeFileDatabase(database) {
   fs.writeFileSync(dbPath, JSON.stringify(database, null, 2), 'utf8')
+}
+
+function ensureTeamCacheFileDatabase() {
+  if (fs.existsSync(teamCacheDbPath)) {
+    return
+  }
+
+  writeTeamCacheFileDatabase({
+    updatedAt: new Date().toISOString(),
+    items: [],
+  })
+}
+
+function readTeamCacheFileDatabase() {
+  ensureTeamCacheFileDatabase()
+  return parseJsonFile(teamCacheDbPath)
+}
+
+function writeTeamCacheFileDatabase(database) {
+  fs.writeFileSync(teamCacheDbPath, JSON.stringify(database, null, 2), 'utf8')
+}
+
+function mapTeamCacheItem(row) {
+  return {
+    teamId: Number(row.team_id ?? row.teamId),
+    teamName: String(row.team_name ?? row.teamName ?? '').trim(),
+    userId: Number(row.user_id ?? row.userId),
+    matricula: String(row.matricula ?? '').trim(),
+    nome: String(row.nome ?? '').trim(),
+    source: String(row.source ?? 'manual').trim() || 'manual',
+    updatedAt: row.updated_at ?? row.updatedAt ?? new Date().toISOString(),
+  }
+}
+
+function isSupabaseMissingTableError(error) {
+  return (
+    error &&
+    typeof error === 'object' &&
+    (error.code === '42P01' ||
+      String(error.message ?? '')
+        .toLowerCase()
+        .includes('relation') &&
+      String(error.message ?? '')
+        .toLowerCase()
+        .includes('does not exist'))
+  )
 }
 
 async function ensureSupabaseSeed() {
@@ -231,6 +283,156 @@ async function getCollaboratorsPayloadForAudit() {
   }
 }
 
+async function listTeamCacheMembers(options = {}) {
+  const teamId = Number(options.teamId)
+
+  if (supabase) {
+    let query = supabase
+      .from(teamCacheTable)
+      .select('team_id,team_name,user_id,matricula,nome,source,updated_at')
+      .order('team_name', { ascending: true })
+      .order('nome', { ascending: true })
+
+    if (Number.isFinite(teamId) && teamId > 0) {
+      query = query.eq('team_id', teamId)
+    }
+
+    const { data, error } = await query
+
+    if (error) {
+      if (!isSupabaseMissingTableError(error)) {
+        throw error
+      }
+    } else {
+      return (data ?? []).map(mapTeamCacheItem)
+    }
+  }
+
+  const database = readTeamCacheFileDatabase()
+  const items = Array.isArray(database.items) ? database.items.map(mapTeamCacheItem) : []
+
+  if (Number.isFinite(teamId) && teamId > 0) {
+    return items.filter((item) => item.teamId === teamId)
+  }
+
+  return items
+}
+
+async function upsertTeamCacheMembers(teamId, teamName, members) {
+  const normalizedItems = Array.from(
+    new Map(
+      members
+        .map((item) => ({
+          teamId,
+          teamName: String(teamName ?? '').trim(),
+          userId: Number(item?.userId),
+          matricula: String(item?.matricula ?? '').trim(),
+          nome: String(item?.nome ?? '').trim(),
+          source: 'manual',
+        }))
+        .filter(
+          (item) =>
+            Number.isFinite(item.teamId) &&
+            item.teamId > 0 &&
+            Number.isFinite(item.userId) &&
+            item.userId > 0 &&
+            item.matricula &&
+            item.nome,
+        )
+        .map((item) => [`${item.teamId}:${item.matricula}`, item]),
+    ).values(),
+  )
+
+  if (!normalizedItems.length) {
+    throw new Error('Nenhum participante valido foi enviado para o cache do time.')
+  }
+
+  const timestamp = new Date().toISOString()
+
+  if (supabase) {
+    const existingRows = await listTeamCacheMembers({ teamId })
+    const rowsToKeep = existingRows.filter(
+      (item) => !normalizedItems.some((candidate) => candidate.matricula === item.matricula),
+    )
+
+    const replaceRows = [
+      ...rowsToKeep.map((item) => ({
+        team_id: item.teamId,
+        team_name: item.teamName,
+        user_id: item.userId,
+        matricula: item.matricula,
+        nome: item.nome,
+        source: item.source,
+        updated_at: item.updatedAt,
+      })),
+      ...normalizedItems.map((item) => ({
+        team_id: item.teamId,
+        team_name: item.teamName,
+        user_id: item.userId,
+        matricula: item.matricula,
+        nome: item.nome,
+        source: item.source,
+        updated_at: timestamp,
+      })),
+    ]
+
+    const { error: deleteError } = await supabase.from(teamCacheTable).delete().eq('team_id', teamId)
+
+    if (deleteError && !isSupabaseMissingTableError(deleteError)) {
+      throw deleteError
+    }
+
+    if (!isSupabaseMissingTableError(deleteError)) {
+      const { error: insertError } = await supabase.from(teamCacheTable).insert(replaceRows)
+
+      if (insertError) {
+        throw insertError
+      }
+
+      return normalizedItems.map((item) => ({
+        ...item,
+        updatedAt: timestamp,
+      }))
+    }
+  }
+
+  const database = readTeamCacheFileDatabase()
+  const currentItems = Array.isArray(database.items) ? database.items.map(mapTeamCacheItem) : []
+  const rowsToKeep = currentItems.filter(
+    (item) =>
+      item.teamId !== teamId ||
+      !normalizedItems.some((candidate) => candidate.matricula === item.matricula),
+  )
+
+  database.items = [
+    ...rowsToKeep.map((item) => ({
+      teamId: item.teamId,
+      teamName: item.teamName,
+      userId: item.userId,
+      matricula: item.matricula,
+      nome: item.nome,
+      source: item.source,
+      updatedAt: item.updatedAt,
+    })),
+    ...normalizedItems.map((item) => ({
+      teamId: item.teamId,
+      teamName: item.teamName,
+      userId: item.userId,
+      matricula: item.matricula,
+      nome: item.nome,
+      source: item.source,
+      updatedAt: timestamp,
+    })),
+  ]
+  database.updatedAt = timestamp
+  writeTeamCacheFileDatabase(database)
+
+  return normalizedItems.map((item) => ({
+    ...item,
+    updatedAt: timestamp,
+  }))
+}
+
 async function emitCollaboratorsChanged() {
   const payload = await getCollaboratorsPayload()
 
@@ -339,17 +541,29 @@ async function fetchCollaboratorUsersForAudit(options = {}) {
 
 async function buildTeamAuditCsv(teamId) {
   const users = await fetchCollaboratorUsersForAudit()
+  const cachedMembers = await listTeamCacheMembers({ teamId })
 
-  const matchedUsers = users
+  const liveMembers = users
     .filter((user) => Array.isArray(user.teams) && user.teams.some((team) => team.id === teamId))
     .map((user) => ({
       id: user.id,
       matricula: user.username ?? '-',
       nome: user.resolvedName,
+      source: 'skore',
     }))
+
+  const matchedUsers = [...liveMembers, ...cachedMembers.map((item) => ({
+    id: item.userId,
+    matricula: item.matricula,
+    nome: item.nome,
+    source: item.source,
+  }))]
     .filter(
       (member, index, array) =>
-        array.findIndex((candidate) => candidate.id === member.id) === index,
+        array.findIndex(
+          (candidate) =>
+            candidate.id === member.id || candidate.matricula === member.matricula,
+        ) === index,
     )
     .sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'))
 
@@ -624,6 +838,10 @@ function mapErrorStatus(error) {
     return 400
   }
 
+  if (message === 'Nenhum participante valido foi enviado para o cache do time.') {
+    return 400
+  }
+
   return 500
 }
 
@@ -664,6 +882,64 @@ app.get('/api/collaborators', async (_request, response, next) => {
 
     response.json(await getCollaboratorsPayload())
   } catch (error) {
+    next(error)
+  }
+})
+
+app.get('/api/team-cache', async (request, response, next) => {
+  try {
+    const teamIdRaw = String(request.query.teamId ?? '').trim()
+    const teamId = teamIdRaw ? Number(teamIdRaw) : undefined
+
+    const items = await listTeamCacheMembers({
+      teamId: Number.isFinite(teamId) ? teamId : undefined,
+    })
+
+    response.json({
+      items,
+      total: items.length,
+      updatedAt: new Date().toISOString(),
+    })
+  } catch (error) {
+    next(error)
+  }
+})
+
+app.post('/api/team-cache/upsert', async (request, response, next) => {
+  try {
+    const teamId = Number(request.body?.teamId)
+    const teamName = String(request.body?.teamName ?? '').trim()
+    const items = Array.isArray(request.body?.items) ? request.body.items : null
+
+    if (!Number.isFinite(teamId) || teamId <= 0 || !teamName) {
+      response.status(400).json({ error: 'Informe teamId e teamName validos.' })
+      return
+    }
+
+    if (!items) {
+      response.status(400).json({ error: 'Envie a lista em items.' })
+      return
+    }
+
+    const persisted = await upsertTeamCacheMembers(teamId, teamName, items)
+
+    response.status(200).json({
+      total: persisted.length,
+      item: {
+        teamId,
+        teamName,
+      },
+    })
+  } catch (error) {
+    const status = mapErrorStatus(error)
+
+    if (status !== 500) {
+      response.status(status).json({
+        error: error instanceof Error ? error.message : 'Erro interno no servidor.',
+      })
+      return
+    }
+
     next(error)
   }
 })
