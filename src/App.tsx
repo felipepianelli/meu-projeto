@@ -2273,88 +2273,47 @@ function downloadMissionAudienceMembers(
   missionName: string,
   members: MissionAudienceSummary['members'],
 ) {
-  const rows = members
-    .map(
-      (member) =>
-        `<tr><td>${escapeHtml(member.username ?? '-')}</td><td>${escapeHtml(member.name)}</td><td>${escapeHtml(formatMissionMemberStatus(member.missionStatus))}</td><td>${escapeHtml(member.progressPercentage !== null ? `${member.progressPercentage}%` : '-')}</td><td>${escapeHtml(member.completedAtLabel ?? '-')}</td></tr>`,
-    )
-    .join('')
-
-  const content = `<!doctype html>
-<html>
-  <head>
-    <meta charset="utf-8" />
-    <table>
-      <tr><th>Matricula</th><th>Nome</th><th>Status</th><th>Progresso</th><th>Conclusao</th></tr>
-      ${rows}
-    </table>
-  </head>
-  <body></body>
-</html>`
-
-  const blob = new Blob([content], {
-    type: 'application/vnd.ms-excel;charset=utf-8;',
-  })
-  const url = URL.createObjectURL(blob)
-  const link = document.createElement('a')
-  link.href = url
-  link.download = `${slugify(missionName)}.xls`
-  document.body.appendChild(link)
-  link.click()
-  document.body.removeChild(link)
-  URL.revokeObjectURL(url)
+  downloadWorkbook(
+    missionName,
+    'Participantes',
+    members.map((member) => ({
+      Matricula: member.username ?? '-',
+      Nome: member.name,
+      Status: formatMissionMemberStatus(member.missionStatus),
+      Progresso: member.progressPercentage !== null ? `${member.progressPercentage}%` : '-',
+      Conclusao: member.completedAtLabel ?? '-',
+    })),
+  )
 }
 
 function downloadCollaboratorMissionMatrix(data: CollaboratorMissionMatrix) {
-  const header = data.missions
-    .map((mission) => `<th>${escapeHtml(mission.name)}</th>`)
-    .join('')
-  const rows = data.collaborators
-    .map((row) => {
-      const marks = data.missions
-        .map((mission) => `<td>${row.missionNames.includes(mission.name) ? 'X' : ''}</td>`)
-        .join('')
+  downloadWorkbook(
+    'matriz-de-missoes',
+    'Matriz',
+    data.collaborators.map((row) => {
+      const item: Record<string, string> = {
+        Nome: row.name,
+        Matricula: row.matricula,
+      }
 
-      return `<tr><td>${escapeHtml(row.name)}</td><td>${escapeHtml(row.matricula)}</td>${marks}</tr>`
-    })
-    .join('')
+      data.missions.forEach((mission) => {
+        item[mission.name] = row.missionNames.includes(mission.name) ? 'X' : ''
+      })
 
-  const content = `<!doctype html>
-<html>
-  <head>
-    <meta charset="utf-8" />
-    <table>
-      <tr><th>Nome</th><th>Matricula</th>${header}</tr>
-      ${rows}
-    </table>
-  </head>
-  <body></body>
-</html>`
-
-  downloadHtmlTableAsXls('matriz-de-missoes', content)
+      return item
+    }),
+  )
 }
 
 function downloadCollaboratorsDb(collaborators: CollaboratorRecord[]) {
-  const rows = collaborators
-    .map(
-      (row) =>
-        `<tr><td>${escapeHtml(row.matricula)}</td><td>${escapeHtml(row.nome)}</td></tr>`,
-    )
-    .join('')
-
-  const content = `<!doctype html>
-<html>
-  <head>
-    <meta charset="utf-8" />
-    <table>
-      <tr><th>Matricula</th><th>Nome</th></tr>
-      ${rows}
-    </table>
-  </head>
-  <body></body>
-</html>`
-
-  downloadHtmlTableAsXls('banco-de-colaboradores', content)
+  downloadWorkbook(
+    'banco-de-colaboradores',
+    'Colaboradores',
+    collaborators.map((row) => ({
+      Matricula: row.matricula,
+      Nome: row.nome,
+    })),
+  )
 }
 
 async function handleDownloadAllReports(
@@ -2364,43 +2323,32 @@ async function handleDownloadAllReports(
 
   try {
     const rows = await fetchAllMissionReportRows()
-    const contentRows = rows
-      .map(
-        (row) =>
-          `<tr><td>${escapeHtml(row.matricula)}</td><td>${escapeHtml(row.name)}</td><td>${escapeHtml(row.missionId)}</td><td>${escapeHtml(formatMissionMemberStatus(row.status))}</td><td>${escapeHtml(row.completedAtLabel ?? '-')}</td><td>${escapeHtml(row.missionName)}</td></tr>`,
-      )
-      .join('')
-
-    const content = `<!doctype html>
-<html>
-  <head>
-    <meta charset="utf-8" />
-    <table>
-      <tr><th>Matricula</th><th>Nome</th><th>ID da Missao</th><th>Status da Missao</th><th>Data de Conclusao</th><th>Nome da Missao</th></tr>
-      ${contentRows}
-    </table>
-  </head>
-  <body></body>
-</html>`
-
-    downloadHtmlTableAsXls('relatorios-gerais-missoes', content)
+    downloadWorkbook(
+      'relatorios-gerais-missoes',
+      'Relatorios',
+      rows.map((row) => ({
+        Matricula: row.matricula,
+        Nome: row.name,
+        'ID da Missao': row.missionId,
+        'Status da Missao': formatMissionMemberStatus(row.status),
+        'Data de Conclusao': row.completedAtLabel ?? '-',
+        'Nome da Missao': row.missionName,
+      })),
+    )
   } finally {
     setIsExportingReports(false)
   }
 }
 
-function downloadHtmlTableAsXls(fileName: string, content: string) {
-  const blob = new Blob([content], {
-    type: 'application/vnd.ms-excel;charset=utf-8;',
-  })
-  const url = URL.createObjectURL(blob)
-  const link = document.createElement('a')
-  link.href = url
-  link.download = `${slugify(fileName)}.xls`
-  document.body.appendChild(link)
-  link.click()
-  document.body.removeChild(link)
-  URL.revokeObjectURL(url)
+function downloadWorkbook(
+  fileName: string,
+  sheetName: string,
+  rows: Array<Record<string, string>>,
+) {
+  const worksheet = XLSX.utils.json_to_sheet(rows)
+  const workbook = XLSX.utils.book_new()
+  XLSX.utils.book_append_sheet(workbook, worksheet, sheetName)
+  XLSX.writeFile(workbook, `${slugify(fileName)}.xlsx`)
 }
 
 function getInitialAccessUser() {
@@ -2484,15 +2432,6 @@ function slugify(value: string) {
     .replace(/[^a-zA-Z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
     .toLowerCase()
-}
-
-function escapeHtml(value: string) {
-  return value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;')
 }
 
 function formatMissionMemberStatus(status: 'COMPLETED' | 'IN_PROGRESS' | 'NOT_STARTED') {
