@@ -23,6 +23,7 @@ const LOCAL_MISSION_AUDIENCE_KEY = 'skore_manager_mission_audience_overrides'
 const LOCAL_COLLABORATORS_KEY = 'skore_manager_collaborators_db'
 const LOCAL_COLLABORATORS_SYNC_KEY = 'skore_manager_collaborators_synced_at'
 const JSL_GRU_FILTER = 'jsl/gru'
+const REMOVED_TEAM_IDS = new Set(['631757'])
 const LOOKER_QUERY_URL = 'https://skoreio.sa.looker.com/api/internal/querymanager/queries'
 const collaboratorsApiUrl =
   import.meta.env.VITE_COLLABORATORS_API_URL?.trim() ||
@@ -515,6 +516,18 @@ type MissionAudienceOverride = {
   }>
 }
 
+function sanitizeMissionAudience(
+  audience: Array<{
+    id: string
+    name: string
+    type: 'team' | 'user'
+  }>,
+) {
+  return audience.filter(
+    (item) => item.type !== 'team' || !REMOVED_TEAM_IDS.has(String(item.id)),
+  )
+}
+
 function readMissionAudienceOverrides() {
   if (typeof window === 'undefined') {
     return {} as Record<string, MissionAudienceOverride>
@@ -527,7 +540,26 @@ function readMissionAudienceOverrides() {
   }
 
   try {
-    return JSON.parse(raw) as Record<string, MissionAudienceOverride>
+    const parsed = JSON.parse(raw) as Record<string, MissionAudienceOverride>
+    let changed = false
+
+    const sanitized = Object.fromEntries(
+      Object.entries(parsed).map(([missionId, override]) => {
+        const audience = sanitizeMissionAudience(override?.audience ?? [])
+
+        if (audience.length !== (override?.audience?.length ?? 0)) {
+          changed = true
+        }
+
+        return [missionId, { audience }]
+      }),
+    ) as Record<string, MissionAudienceOverride>
+
+    if (changed) {
+      writeMissionAudienceOverrides(sanitized)
+    }
+
+    return sanitized
   } catch {
     return {} as Record<string, MissionAudienceOverride>
   }
@@ -552,12 +584,15 @@ function getMissionDefinitionWithOverrides(missionId: string) {
   const override = overrides[missionId]
 
   if (!override) {
-    return mission
+    return {
+      ...mission,
+      audience: sanitizeMissionAudience(mission.audience),
+    }
   }
 
   return {
     ...mission,
-    audience: override.audience,
+    audience: sanitizeMissionAudience(override.audience),
   }
 }
 
@@ -1332,7 +1367,7 @@ function persistMissionAudienceOverride(
   audience: Array<{ id: string; name: string; type: 'team' | 'user' }>,
 ) {
   const overrides = readMissionAudienceOverrides()
-  overrides[missionId] = { audience }
+  overrides[missionId] = { audience: sanitizeMissionAudience(audience) }
   writeMissionAudienceOverrides(overrides)
 }
 
