@@ -107,11 +107,6 @@ export const missionAudienceCatalog: MissionAudienceDefinition[] = [
         name: 'JSL/GRU - MANUAL DA QUALIDADE - BOAS PRATICAS DE ARMAZENAGEM E DISTRIBUICAO DE CARGAS',
         type: 'team',
       },
-      {
-        id: '631757',
-        name: 'JSL/GRU - GESTORES ELEGIVEIS - OPERACIONAL GRU',
-        type: 'team',
-      },
     ],
   },
   {
