@@ -566,16 +566,36 @@ export async function fetchMembersForTeam(
   _options?: { refresh?: boolean },
 ): Promise<TeamMember[]> {
   const userDetailsCache = new Map<string, Promise<SkoreUserDetailApiItem | null>>()
-  const [team, cachedMembers] = await Promise.all([
-    readJson<SkoreTeamDetailApiItem>(`${getTeamsUrl()}/${teamId}`, {
+  const cachedMembers = await fetchTeamCacheMembers(teamId).catch(
+    () => [] as TeamCacheMemberRecord[],
+  )
+  let team: SkoreTeamDetailApiItem | null = null
+
+  try {
+    team = await readJson<SkoreTeamDetailApiItem>(`${getTeamsUrl()}/${teamId}`, {
       headers: {
         Accept: 'application/json',
         'Content-Type': 'application/json',
         ...getAuthHeaders(),
       },
-    }),
-    fetchTeamCacheMembers(teamId).catch(() => [] as TeamCacheMemberRecord[]),
-  ])
+    })
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      error.message.includes('(404)')
+    ) {
+      return cachedMembers
+        .map((member) => ({
+          id: member.userId,
+          name: member.nome,
+          username: member.matricula,
+          inSpreadsheet: getCollaboratorContext().allowedMatriculas.has(member.matricula),
+        }))
+        .sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'))
+    }
+
+    throw error
+  }
 
   const userIds = Array.from(new Set(team.userIds ?? []))
   const users = userIds.length
